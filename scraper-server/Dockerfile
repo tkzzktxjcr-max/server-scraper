@@ -1,14 +1,14 @@
 # ─────────────────────────────────────────────
 # SCRAPER SERVER DOCKERFILE
-# Optimized for Coolify deployment
+# Uses Debian for better Chromium compatibility
 # ─────────────────────────────────────────────
 
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:20-bookworm AS builder
 
 WORKDIR /app
 
-# Install dependencies first (better caching)
+# Install dependencies
 COPY package*.json ./
 RUN npm ci --only=production=false
 
@@ -17,23 +17,32 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:20-alpine AS production
+FROM node:20-bookworm-slim AS production
 
-# Install Playwright dependencies for Puppeteer
-RUN apk add --no-cache \
+# Install Chromium and dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
-    chromium-suid \
-    nss \
-    freetype \
-    harfbuzz \
+    chromium-sandbox \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
     ca-certificates \
-    ttf-freefont \
-    udev
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set environment variables for Puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-ENV PUPPETEER_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu"
 
 WORKDIR /app
 
@@ -44,11 +53,8 @@ COPY --from=builder /app/package*.json ./
 # Install production dependencies only
 RUN npm ci --only=production && npm cache clean --force
 
-# Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
-    chown -R nodejs:nodejs /app
-
+# Create non-root user
+RUN useradd -m -u 1001 nodejs && chown -R nodejs:nodejs /app
 USER nodejs
 
 # Expose port
