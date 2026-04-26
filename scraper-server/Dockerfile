@@ -8,9 +8,9 @@ FROM node:20-bookworm AS builder
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies first (better caching)
 COPY package*.json ./
-RUN npm ci --only=production=false
+RUN npm install --include=dev
 
 # Copy source and build
 COPY . .
@@ -51,7 +51,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 
 # Install production dependencies only
-RUN npm ci --only=production && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Create non-root user
 RUN useradd -m -u 1001 nodejs && chown -R nodejs:nodejs /app
