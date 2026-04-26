@@ -33,10 +33,21 @@ export const logger = winston.createLogger({
 });
 
 // ─────────────────────────────────────────────
+// JOB-SPECIFIC LOGGER INTERFACE
+// ─────────────────────────────────────────────
+
+export interface JobLogger {
+  info: (message: string, meta?: Record<string, unknown>) => void;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+  error: (message: string, meta?: Record<string, unknown>) => void;
+  debug: (message: string, meta?: Record<string, unknown>) => void;
+}
+
+// ─────────────────────────────────────────────
 // JOB-SPECIFIC LOGGER
 // ─────────────────────────────────────────────
 
-export function createJobLogger(jobId: string) {
+export function createJobLogger(jobId: string): JobLogger {
   return {
     info: (message: string, meta?: Record<string, unknown>) => 
       logger.info(message, { jobId, ...meta }),

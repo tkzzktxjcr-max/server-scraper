@@ -10,9 +10,7 @@ import {
   PropertyData,
   getSiteBySlug 
 } from "../appwrite/client.js";
-import { logger } from "../utils/logger.js";
-import { createJobLogger } from "../utils/logger.js";
-import { config } from "../config.js";
+import { logger, JobLogger } from "../utils/logger.js";
 
 // ─────────────────────────────────────────────
 // TYPE DEFINITIONS
@@ -31,13 +29,28 @@ export interface ScrapeParams {
   };
 }
 
+export interface ScrapeResult {
+  listings: unknown[];
+  errors: string[];
+}
+
 // ─────────────────────────────────────────────
 // SCRAPER RUNNER
 // ─────────────────────────────────────────────
 
 export async function runScraper(params: ScrapeParams): Promise<void> {
   const { jobId, source, filters } = params;
-  const jobLogger = createJobLogger(jobId);
+  const jobLogger: JobLogger = {
+    info: (message: string, meta?: Record<string, unknown>) => 
+      logger.info(message, { jobId, ...meta }),
+    warn: (message: string, meta?: Record<string, unknown>) => 
+      logger.warn(message, { jobId, ...meta }),
+    error: (message: string, meta?: Record<string, unknown>) => 
+      logger.error(message, { jobId, ...meta }),
+    debug: (message: string, meta?: Record<string, unknown>) => 
+      logger.debug(message, { jobId, ...meta }),
+  };
+  
   let page: Page | null = null;
 
   try {
@@ -66,7 +79,7 @@ export async function runScraper(params: ScrapeParams): Promise<void> {
     );
 
     // Scrape based on source
-    let scrapeResult;
+    let scrapeResult: ScrapeResult;
     switch (source) {
       case "immoweb":
         scrapeResult = await scrapeImmoweb(page, filters || {}, jobLogger);
@@ -92,13 +105,13 @@ export async function runScraper(params: ScrapeParams): Promise<void> {
         
         switch (source) {
           case "immoweb":
-            propertyData = immowebToPropertyData(listing as any, site.$id);
+            propertyData = immowebToPropertyData(listing as Parameters<typeof immowebToPropertyData>[0], site.$id);
             break;
           case "zimmo":
-            propertyData = zimmoToPropertyData(listing as any, site.$id);
+            propertyData = zimmoToPropertyData(listing as Parameters<typeof zimmoToPropertyData>[0], site.$id);
             break;
           case "immovlan":
-            propertyData = immovlanToPropertyData(listing as any, site.$id);
+            propertyData = immovlanToPropertyData(listing as Parameters<typeof immovlanToPropertyData>[0], site.$id);
             break;
         }
 

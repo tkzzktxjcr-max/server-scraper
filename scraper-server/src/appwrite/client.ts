@@ -8,15 +8,14 @@ import { logger } from "../utils/logger.js";
 
 const client = new Client()
   .setEndpoint(config.appwrite.endpoint)
-  .setProject(config.appwrite.project)
-  .setKey(config.appwrite.apiKey);
+  .setProject(config.appwrite.project);
 
 export const databases = new Databases(client);
 
 export const APPWRITE_DATABASE_ID = config.appwrite.databaseId;
 
 // ─────────────────────────────────────────────
-// COLLECTION IDs
+// COLLECTION IDS
 // ─────────────────────────────────────────────
 
 export const COLLECTIONS = {
@@ -214,7 +213,7 @@ export async function createProperty(property: PropertyData): Promise<string> {
   return propertyId;
 }
 
-export async function updateProperty(propertyId: string, updates: Partial<PropertyData>) {
+export async function updateProperty(propertyId: string, updates: Partial<PropertyData> & { is_active?: boolean }) {
   await databases.updateDocument(
     APPWRITE_DATABASE_ID,
     COLLECTIONS.PROPERTIES,

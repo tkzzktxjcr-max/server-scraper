@@ -1,5 +1,5 @@
 import { Page } from "puppeteer";
-import { logger } from "../utils/logger.js";
+import { logger, JobLogger } from "../utils/logger.js";
 import { delay } from "../utils/rate-limit.js";
 import { PropertyData } from "../appwrite/client.js";
 import { config } from "../config.js";
@@ -37,7 +37,7 @@ export async function scrapeZimmo(
     price_max?: number;
     type?: string;
   } = {},
-  jobLogger: ReturnType<typeof logger.info extends (msg: string, meta?: infer M) => void ? (msg: string, meta?: M) => { info: (msg: string, meta?: M) => void } : never>
+  jobLogger: JobLogger
 ): Promise<{ listings: ZimmoListing[]; errors: string[] }> {
   const listings: ZimmoListing[] = [];
   const errors: string[] = [];

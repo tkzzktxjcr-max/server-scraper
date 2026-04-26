@@ -8,12 +8,14 @@ FROM node:20-bookworm AS builder
 
 WORKDIR /app
 
-# Install dependencies first (better caching)
-COPY package*.json ./
-RUN npm install --include=dev
+# Copy source files
+COPY package*.json tsconfig.json ./
+COPY src ./src
 
-# Copy source and build
-COPY . .
+# Install dependencies (include dev for TypeScript types)
+RUN npm install
+
+# Build TypeScript
 RUN npm run build
 
 # Production stage
@@ -37,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     ca-certificates \
     fonts-liberation \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Set environment variables for Puppeteer
@@ -47,11 +50,11 @@ ENV PUPPETEER_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usag
 WORKDIR /app
 
 # Copy built application
-COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/dist ./dist
 
 # Install production dependencies only
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm install --omit=dev && npm cache clean --force
 
 # Create non-root user
 RUN useradd -m -u 1001 nodejs && chown -R nodejs:nodejs /app
