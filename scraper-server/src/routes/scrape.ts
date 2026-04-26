@@ -8,7 +8,10 @@ import type { ScraperSource } from "../scrapers/index.js";
 
 export const scrapeRouter = Router();
 
-// Validation schema
+// ─────────────────────────────────────────────
+// VALIDATION SCHEMA
+// ─────────────────────────────────────────────
+
 const ScrapeSchema = z.object({
   source: z.enum(["immoweb", "zimmo", "immovlan"]),
   trigger: z.enum(["manual", "agent"]),
@@ -22,7 +25,10 @@ const ScrapeSchema = z.object({
     .optional(),
 });
 
+// ─────────────────────────────────────────────
 // POST /api/scrape - Trigger a new scrape job
+// ─────────────────────────────────────────────
+
 scrapeRouter.post("/", async (req: Request, res: Response) => {
   try {
     // Rate limiting
@@ -71,6 +77,7 @@ scrapeRouter.post("/", async (req: Request, res: Response) => {
       jobId,
       source: source as ScraperSource,
       filters,
+      trigger,
     });
 
     logger.info(`Scrape job created and queued: ${jobId}`);
@@ -93,7 +100,10 @@ scrapeRouter.post("/", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/status/:id - Get job status
+// ─────────────────────────────────────────────
+// GET /api/scrape/status/:id - Get job status
+// ─────────────────────────────────────────────
+
 scrapeRouter.get("/status/:id", async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -141,7 +151,10 @@ scrapeRouter.get("/status/:id", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/queue - Get queue status
+// ─────────────────────────────────────────────
+// GET /api/scrape/queue - Get queue status
+// ─────────────────────────────────────────────
+
 scrapeRouter.get("/queue", async (_req: Request, res: Response) => {
   const status = jobQueue.getStatus();
 

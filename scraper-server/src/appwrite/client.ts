@@ -2,7 +2,10 @@ import { Client, Databases, ID, Query } from "appwrite";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
-// Server-side Appwrite client with API key
+// ─────────────────────────────────────────────
+// APPWRITE CLIENT
+// ─────────────────────────────────────────────
+
 const client = new Client()
   .setEndpoint(config.appwrite.endpoint)
   .setProject(config.appwrite.project)
@@ -12,7 +15,10 @@ export const databases = new Databases(client);
 
 export const APPWRITE_DATABASE_ID = config.appwrite.databaseId;
 
-// Collection IDs
+// ─────────────────────────────────────────────
+// COLLECTION IDs
+// ─────────────────────────────────────────────
+
 export const COLLECTIONS = {
   PROPERTIES: "properties",
   SCRAPING_SITES: "scraping_sites",
@@ -23,6 +29,7 @@ export const COLLECTIONS = {
 // ─────────────────────────────────────────────
 // SITE OPERATIONS
 // ─────────────────────────────────────────────
+
 export async function getSiteBySlug(slug: string) {
   const response = await databases.listDocuments(
     APPWRITE_DATABASE_ID,
@@ -47,6 +54,7 @@ export async function updateSiteLastScrape(siteId: string, status: "success" | "
 // ─────────────────────────────────────────────
 // JOB OPERATIONS
 // ─────────────────────────────────────────────
+
 export interface ScrapingJob {
   $id: string;
   site_id: string;
@@ -62,7 +70,7 @@ export interface ScrapingJob {
 
 export async function createJob(params: {
   siteId: string;
-  trigger: "manual" | "agent";
+  trigger: "manual" | "agent" | "scheduled" | "realtime";
   filters?: Record<string, unknown>;
   createdBy?: string;
 }): Promise<string> {
@@ -147,6 +155,7 @@ export async function getJob(jobId: string): Promise<ScrapingJob | null> {
 // ─────────────────────────────────────────────
 // PROPERTY OPERATIONS
 // ─────────────────────────────────────────────
+
 export interface PropertyData {
   site_id: string;
   source_id: string;
@@ -235,6 +244,7 @@ export async function saveProperty(property: PropertyData): Promise<{ isNew: boo
 // ─────────────────────────────────────────────
 // LOGGING OPERATIONS
 // ─────────────────────────────────────────────
+
 export async function createLog(params: {
   jobId: string;
   siteId: string;

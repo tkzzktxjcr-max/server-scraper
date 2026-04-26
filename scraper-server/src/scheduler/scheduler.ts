@@ -10,6 +10,7 @@ import { createJob } from "../appwrite/client.js";
 import { getSiteBySlug } from "../appwrite/client.js";
 import { jobQueue } from "../jobs/queue.js";
 import { logger } from "../utils/logger.js";
+import type { ScraperSource } from "../scrapers/index.js";
 
 // ─────────────────────────────────────────────
 // TYPE DEFINITIONS
@@ -110,11 +111,10 @@ class Scheduler {
         createdBy: `scheduler:${schedule.$id}`,
       });
 
-      // Add to queue (without browser scraping, just job creation)
-      // The queue processor will handle the actual scraping
+      // Add to queue
       jobQueue.add({
         jobId,
-        siteSlug: schedule.site_slug,
+        source: schedule.site_slug as ScraperSource,
         filters: schedule.filters,
         trigger: "scheduled",
       });
@@ -123,7 +123,7 @@ class Scheduler {
       const nextRun = this.calculateNextRun(schedule.cron_expression);
       await updateScheduleLastRun(schedule.$id, startedAt, nextRun);
 
-      logger.info(`Scheduled job completed: ${schedule.name}`, {
+      logger.info(`Scheduled job queued: ${schedule.name}`, {
         scheduleId: schedule.$id,
         jobId,
         runId,
@@ -265,40 +265,3 @@ class Scheduler {
 
 // Singleton instance
 export const scheduler = new Scheduler();
-
-// ─────────────────────────────────────────────
-// HELPER FUNCTIONS
-// ─────────────────────────────────────────────
-
-/**
- * Get the next occurrence of a cron expression in human-readable format
- */
-export function getNextOccurrence(cronExpression: string): string {
-  const parts = cronExpression.split(" ");
-  if (parts.length !== 5) return "Invalid cron expression";
-
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-
-  // Simple parsing for common patterns
-  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
-    // Daily schedule
-    const h = hour === "*" ? "every hour" : `${hour.padStart(2, "0")}`;
-    const m = minute === "*" ? "every minute" : `${minute.padStart(2, "0")}`;
-    
-    if (hour === "*") {
-      return `Every ${minute} minutes`;
-    }
-    return `Daily at ${h}:${m}`;
-  }
-
-  if (dayOfWeek !== "*" && dayOfMonth === "*") {
-    // Weekly schedule
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const day = days[parseInt(dayOfWeek, 10)] || dayOfWeek;
-    const h = hour === "*" ? "00" : hour.padStart(2, "0");
-    const m = minute === "*" ? "00" : minute.padStart(2, "0");
-    return `Weekly on ${day} at ${h}:${m}`;
-  }
-
-  return `At minute ${minute}, hour ${hour}`;
-}

@@ -1,11 +1,27 @@
-import { runScraper, ScrapeParams } from "../scrapers/index.js";
+import { runScraper, ScrapeParams, ScraperSource } from "../scrapers/index.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
+
+// ─────────────────────────────────────────────
+// TYPE DEFINITIONS
+// ─────────────────────────────────────────────
 
 interface QueuedJob {
   params: ScrapeParams;
   addedAt: number;
 }
+
+export interface QueueJobParams {
+  jobId: string;
+  source: ScraperSource;
+  siteSlug?: string;
+  filters?: Record<string, unknown>;
+  trigger: "manual" | "agent" | "scheduled" | "realtime";
+}
+
+// ─────────────────────────────────────────────
+// JOB QUEUE CLASS
+// ─────────────────────────────────────────────
 
 class JobQueue {
   private queue: QueuedJob[] = [];
@@ -17,7 +33,10 @@ class JobQueue {
     this.maxConcurrent = maxConcurrent;
   }
 
-  add(params: ScrapeParams): void {
+  /**
+   * Add a job to the queue
+   */
+  add(params: QueueJobParams): void {
     // Check if job already in queue or running
     const isQueued = this.queue.some((q) => q.params.jobId === params.jobId);
     const isRunning = this.running.has(params.jobId);
@@ -27,12 +46,23 @@ class JobQueue {
       return;
     }
 
+    // Convert to ScrapeParams
+    const scrapeParams: ScrapeParams = {
+      jobId: params.jobId,
+      source: params.source,
+      filters: params.filters,
+    };
+
     this.queue.push({
-      params,
+      params: scrapeParams,
       addedAt: Date.now(),
     });
 
-    logger.info(`Job ${params.jobId} added to queue`, { queueSize: this.queue.length });
+    logger.info(`Job ${params.jobId} added to queue`, { 
+      source: params.source,
+      trigger: params.trigger,
+      queueSize: this.queue.length 
+    });
     
     // Start processor if not running
     if (!this.processorInterval) {
@@ -40,6 +70,9 @@ class JobQueue {
     }
   }
 
+  /**
+   * Process the next job in the queue
+   */
   private async processNext(): Promise<void> {
     if (this.running.size >= this.maxConcurrent) {
       return; // Max concurrent jobs reached
@@ -53,6 +86,7 @@ class JobQueue {
     this.running.add(job.params.jobId);
     
     logger.info(`Starting job ${job.params.jobId}`, { 
+      source: job.params.source,
       running: this.running.size,
       queued: this.queue.length 
     });
@@ -67,6 +101,9 @@ class JobQueue {
     }
   }
 
+  /**
+   * Start the queue processor
+   */
   private start(): void {
     if (this.processorInterval) return;
 
@@ -82,6 +119,9 @@ class JobQueue {
     }, 1000);
   }
 
+  /**
+   * Stop the queue processor
+   */
   private stop(): void {
     if (this.processorInterval) {
       clearInterval(this.processorInterval);
@@ -89,6 +129,9 @@ class JobQueue {
     }
   }
 
+  /**
+   * Get queue status
+   */
   getStatus(): { running: number; queued: number } {
     return {
       running: this.running.size,
@@ -96,12 +139,28 @@ class JobQueue {
     };
   }
 
+  /**
+   * Check if a job is currently running
+   */
   isJobRunning(jobId: string): boolean {
     return this.running.has(jobId);
   }
 
+  /**
+   * Check if a job is queued
+   */
   isJobQueued(jobId: string): boolean {
     return this.queue.some((q) => q.params.jobId === jobId);
+  }
+
+  /**
+   * Get all queued jobs
+   */
+  getQueuedJobs(): Array<{ jobId: string; addedAt: number }> {
+    return this.queue.map((q) => ({
+      jobId: q.params.jobId,
+      addedAt: q.addedAt,
+    }));
   }
 }
 

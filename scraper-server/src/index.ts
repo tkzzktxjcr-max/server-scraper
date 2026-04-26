@@ -12,11 +12,21 @@ import { jobQueue } from "./jobs/queue.js";
 // ─────────────────────────────────────────────
 // EXPRESS APP SETUP
 // ─────────────────────────────────────────────
+
 const app = express();
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Request logging middleware
+app.use((req, _res, next) => {
+  logger.info(`${req.method} ${req.path}`, { 
+    ip: req.ip,
+    userAgent: req.get("user-agent")
+  });
+  next();
+});
 
 // Rate limiting for all routes
 const globalLimiter = rateLimit({
@@ -47,6 +57,7 @@ app.get("/health", (_req, res) => {
     environment: config.server.nodeEnv,
     queue: queueStatus,
     scheduler: schedulerStatus,
+    uptime: process.uptime(),
   });
 });
 
@@ -79,7 +90,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // START SERVER
 // ─────────────────────────────────────────────
 
-const server = app.listen(config.server.port, async () => {
+const server = app.listen(config.server.port, "0.0.0.0", async () => {
   logger.info(`🚀 Scraper server starting...`, {
     port: config.server.port,
     environment: config.server.nodeEnv,
@@ -97,25 +108,40 @@ const server = app.listen(config.server.port, async () => {
   }
 });
 
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  logger.info("SIGINT received, shutting down gracefully...");
-  await scheduler.shutdown();
-  await browserPool.cleanup();
+// ─────────────────────────────────────────────
+// GRACEFUL SHUTDOWN
+// ─────────────────────────────────────────────
+
+const gracefulShutdown = async (signal: string) => {
+  logger.info(`${signal} received, shutting down gracefully...`);
+  
+  // Stop accepting new connections
   server.close(() => {
-    logger.info("Server closed");
-    process.exit(0);
+    logger.info("HTTP server closed");
   });
+
+  // Shutdown scheduler
+  await scheduler.shutdown();
+  
+  // Cleanup browser pool
+  await browserPool.cleanup();
+  
+  logger.info("Cleanup complete, exiting");
+  process.exit(0);
+};
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
+// Handle uncaught exceptions
+process.on("uncaughtException", (error) => {
+  logger.error("Uncaught exception", { error });
+  gracefulShutdown("uncaughtException");
 });
 
-process.on("SIGTERM", async () => {
-  logger.info("SIGTERM received, shutting down gracefully...");
-  await scheduler.shutdown();
-  await browserPool.cleanup();
-  server.close(() => {
-    logger.info("Server closed");
-    process.exit(0);
-  });
+// Handle unhandled promise rejections
+process.on("unhandledRejection", (reason, promise) => {
+  logger.error("Unhandled rejection", { reason, promise });
 });
 
 export default app;

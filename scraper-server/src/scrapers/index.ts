@@ -14,6 +14,10 @@ import { logger } from "../utils/logger.js";
 import { createJobLogger } from "../utils/logger.js";
 import { config } from "../config.js";
 
+// ─────────────────────────────────────────────
+// TYPE DEFINITIONS
+// ─────────────────────────────────────────────
+
 export type ScraperSource = "immoweb" | "zimmo" | "immovlan";
 
 export interface ScrapeParams {
@@ -26,6 +30,10 @@ export interface ScrapeParams {
     type?: string;
   };
 }
+
+// ─────────────────────────────────────────────
+// SCRAPER RUNNER
+// ─────────────────────────────────────────────
 
 export async function runScraper(params: ScrapeParams): Promise<void> {
   const { jobId, source, filters } = params;
