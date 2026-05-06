@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { sleep } from "./retry.js";
 
 interface RateLimitEntry {
   count: number;
@@ -19,29 +20,27 @@ export function checkRateLimit(clientId: string): { allowed: boolean; remaining:
   }
 
   if (entry.count >= maxRequests) {
-    return { 
-      allowed: false, 
-      remaining: 0, 
-      resetIn: entry.resetTime - now 
+    return {
+      allowed: false,
+      remaining: 0,
+      resetIn: entry.resetTime - now,
     };
   }
 
   entry.count++;
-  return { 
-    allowed: true, 
-    remaining: maxRequests - entry.count, 
-    resetIn: entry.resetTime - now 
+  return {
+    allowed: true,
+    remaining: maxRequests - entry.count,
+    resetIn: entry.resetTime - now,
   };
 }
 
-export function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-export async function requestWithDelay<T>(
-  fn: () => Promise<T>,
-  delayMs: number = config.rateLimit.delayMs
-): Promise<T> {
-  await delay(delayMs);
-  return fn();
+/**
+ * Delay with configurable base + random jitter for anti-detection
+ */
+export async function requestDelay(): Promise<void> {
+  const baseMs = config.rateLimit.delayMs;
+  const jitterMs = config.rateLimit.jitterMs;
+  const totalDelay = baseMs + Math.random() * jitterMs;
+  await sleep(totalDelay);
 }

@@ -74,7 +74,7 @@ export async function createJob(params: {
   createdBy?: string;
 }): Promise<string> {
   const jobId = ID.unique();
-  
+
   await databases.createDocument(
     APPWRITE_DATABASE_ID,
     COLLECTIONS.SCRAPING_JOBS,
@@ -91,7 +91,7 @@ export async function createJob(params: {
       created_by: params.createdBy || "scraper-server",
     }
   );
-  
+
   logger.info(`Created job document: ${jobId}`);
   return jobId;
 }
@@ -103,26 +103,26 @@ export async function updateJobStatus(
   errorMessage?: string
 ) {
   const updateData: Record<string, unknown> = { status };
-  
+
   if (stats) {
     updateData.stats = JSON.stringify(stats);
   }
-  
+
   if (errorMessage) {
     updateData.error_message = errorMessage;
   }
-  
+
   if (status === "completed" || status === "failed") {
     updateData.completed_at = new Date().toISOString();
   }
-  
+
   await databases.updateDocument(
     APPWRITE_DATABASE_ID,
     COLLECTIONS.SCRAPING_JOBS,
     jobId,
     updateData
   );
-  
+
   logger.info(`Updated job ${jobId} status to: ${status}`);
 }
 
@@ -133,7 +133,7 @@ export async function getJob(jobId: string): Promise<ScrapingJob | null> {
       COLLECTIONS.SCRAPING_JOBS,
       jobId
     );
-    
+
     return {
       $id: doc.$id,
       site_id: doc.site_id,
@@ -152,7 +152,7 @@ export async function getJob(jobId: string): Promise<ScrapingJob | null> {
 }
 
 // ─────────────────────────────────────────────
-// PROPERTY OPERATIONS
+// PROPERTY OPERATIONS (with improved deduplication)
 // ─────────────────────────────────────────────
 
 export interface PropertyData {
@@ -181,23 +181,60 @@ export interface PropertyData {
   year_built: number;
 }
 
-export async function findExistingProperty(siteId: string, sourceId: string): Promise<string | null> {
-  const response = await databases.listDocuments(
-    APPWRITE_DATABASE_ID,
-    COLLECTIONS.PROPERTIES,
-    [
-      Query.equal("site_id", siteId),
-      Query.equal("source_id", sourceId),
-      Query.limit(1),
-    ]
-  );
-  
-  return response.documents[0]?.$id || null;
+/**
+ * Find existing property by source_id (primary) or URL (fallback)
+ * This ensures proper deduplication even if source_id format changes
+ */
+export async function findExistingProperty(siteId: string, sourceId: string, url?: string): Promise<string | null> {
+  // Primary: search by source_id
+  if (sourceId) {
+    try {
+      const response = await databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        COLLECTIONS.PROPERTIES,
+        [
+          Query.equal("site_id", siteId),
+          Query.equal("source_id", sourceId),
+          Query.limit(1),
+        ]
+      );
+
+      if (response.documents.length > 0) {
+        return response.documents[0].$id;
+      }
+    } catch (error) {
+      logger.warn(`Failed to search by source_id: ${sourceId}`, { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  // Fallback: search by URL
+  if (url) {
+    try {
+      const response = await databases.listDocuments(
+        APPWRITE_DATABASE_ID,
+        COLLECTIONS.PROPERTIES,
+        [
+          Query.equal("site_id", siteId),
+          Query.equal("url", url),
+          Query.limit(1),
+        ]
+      );
+
+      if (response.documents.length > 0) {
+        logger.info(`Found existing property by URL fallback (source_id missing?)`, { url, sourceId });
+        return response.documents[0].$id;
+      }
+    } catch (error) {
+      logger.warn(`Failed to search by URL: ${url}`, { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return null;
 }
 
 export async function createProperty(property: PropertyData): Promise<string> {
   const propertyId = ID.unique();
-  
+
   await databases.createDocument(
     APPWRITE_DATABASE_ID,
     COLLECTIONS.PROPERTIES,
@@ -209,7 +246,7 @@ export async function createProperty(property: PropertyData): Promise<string> {
       last_updated: new Date().toISOString(),
     }
   );
-  
+
   return propertyId;
 }
 
@@ -226,8 +263,9 @@ export async function updateProperty(propertyId: string, updates: Partial<Proper
 }
 
 export async function saveProperty(property: PropertyData): Promise<{ isNew: boolean; propertyId: string }> {
-  const existingId = await findExistingProperty(property.site_id, property.source_id);
-  
+  // Use improved deduplication with URL fallback
+  const existingId = await findExistingProperty(property.site_id, property.source_id, property.url);
+
   if (existingId) {
     await updateProperty(existingId, {
       ...property,

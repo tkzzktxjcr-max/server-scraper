@@ -1,4 +1,3 @@
-// @ts-nocheck
 import winston from "winston";
 
 const logFormat = winston.format.combine(
@@ -10,10 +9,10 @@ const logFormat = winston.format.combine(
 const consoleFormat = winston.format.combine(
   winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
   winston.format.colorize(),
-  winston.format.printf((info) => {
+  winston.format.printf((info: Record<string, unknown>) => {
     const { timestamp, level, message, ...meta } = info;
     const metaStr = Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : "";
-    return `[${timestamp}] ${level}: ${message}${metaStr}`;
+    return `[${timestamp as string}] ${level as string}: ${message as string}${metaStr}`;
   })
 );
 

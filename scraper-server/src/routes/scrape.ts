@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Router, Request, Response } from "express";
 import { checkRateLimit } from "../utils/rate-limit.js";
 import { jobQueue } from "../jobs/queue.js";
@@ -7,7 +6,7 @@ import { logger } from "../utils/logger.js";
 
 export const scrapeRouter = Router();
 
-scrapeRouter.post("/", async (req, res) => {
+scrapeRouter.post("/", async (req: Request, res: Response) => {
   try {
     // Rate limiting
     const clientId = req.ip || "unknown";
@@ -39,7 +38,7 @@ scrapeRouter.post("/", async (req, res) => {
       logger.info(`Site ${source} not found, creating it...`);
       const { ID } = await import("appwrite");
       
-      const siteData: Record<string, any> = {
+      const siteData: Record<string, unknown> = {
         name: source.charAt(0).toUpperCase() + source.slice(1),
         slug: source,
         base_url: `https://www.${source}.be`,
@@ -60,7 +59,7 @@ scrapeRouter.post("/", async (req, res) => {
         );
         logger.info(`Created site: ${source}`);
       } catch (createError) {
-        logger.error(`Failed to create site ${source}:`, createError);
+        logger.error(`Failed to create site ${source}:`, { error: createError instanceof Error ? createError.message : String(createError) });
         return res.status(500).json({
           error: "Failed to create site",
           message: String(createError),
@@ -97,7 +96,7 @@ scrapeRouter.post("/", async (req, res) => {
       },
     });
   } catch (error) {
-    logger.error("Failed to create scrape job", { error });
+    logger.error("Failed to create scrape job", { error: error instanceof Error ? error.message : String(error) });
     return res.status(500).json({
       error: "Failed to create scrape job",
       message: String(error),
@@ -105,7 +104,7 @@ scrapeRouter.post("/", async (req, res) => {
   }
 });
 
-scrapeRouter.get("/status/:id", async (req, res) => {
+scrapeRouter.get("/status/:id", async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
@@ -143,7 +142,7 @@ scrapeRouter.get("/status/:id", async (req, res) => {
       },
     });
   } catch (error) {
-    logger.error("Failed to get job status", { error, jobId: req.params.id });
+    logger.error("Failed to get job status", { error: error instanceof Error ? error.message : String(error), jobId: req.params.id });
     return res.status(500).json({
       error: "Failed to get job status",
       message: String(error),
@@ -151,7 +150,7 @@ scrapeRouter.get("/status/:id", async (req, res) => {
   }
 });
 
-scrapeRouter.get("/queue", async (req, res) => {
+scrapeRouter.get("/queue", async (_req: Request, res: Response) => {
   const status = jobQueue.getStatus();
   return res.json({
     running: status.running,
