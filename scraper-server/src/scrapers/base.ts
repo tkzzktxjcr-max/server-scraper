@@ -49,6 +49,7 @@ export abstract class BaseScraper {
   abstract getApiPattern(): string | RegExp;
   abstract parseSearchResults(responses: InterceptedResponse[]): SearchResultItem[];
   abstract extractDetailData(responses: InterceptedResponse[], url: string): Promise<Partial<PropertyData>>;
+  abstract buildSearchUrl(filters?: ScraperFilters): string;
 
   async scrapeSearchPage(page: Page, searchUrl: string): Promise<ScrapeResult> {
     this.logger.info(`Navigating to search: ${searchUrl}`);
@@ -59,6 +60,8 @@ export abstract class BaseScraper {
     await new Promise(r => setTimeout(r, 3000));
     
     const results = this.parseSearchResults(apiResponses);
+    
+    this.logger.info(`Parsed ${results.length} listings from API responses`);
     
     return {
       listings: results as unknown as RawListing[],

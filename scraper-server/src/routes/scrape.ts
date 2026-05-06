@@ -3,6 +3,7 @@ import { checkRateLimit } from "../utils/rate-limit.js";
 import { jobQueue } from "../jobs/queue.js";
 import { createJob, getSiteBySlug, getJob, databases, APPWRITE_DATABASE_ID, COLLECTIONS } from "../appwrite/client.js";
 import { logger } from "../utils/logger.js";
+import { runTestScrape } from "../scrapers/index.js";
 
 export const scrapeRouter = Router();
 
@@ -100,6 +101,31 @@ scrapeRouter.post("/", async (req: Request, res: Response) => {
     return res.status(500).json({
       error: "Failed to create scrape job",
       message: String(error),
+    });
+  }
+});
+
+scrapeRouter.post("/test", async (req: Request, res: Response) => {
+  try {
+    const { source, filters } = req.body;
+    
+    if (!source) {
+      return res.status(400).json({ error: "source is required" });
+    }
+
+    logger.info(`Running test scrape for: ${source}`);
+    
+    const result = await runTestScrape(source, filters);
+    
+    return res.json({
+      success: !result.error,
+      ...result,
+    });
+  } catch (error) {
+    logger.error("Test scrape failed", { error: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({
+      error: "Test scrape failed",
+      message: error instanceof Error ? error.message : String(error),
     });
   }
 });

@@ -1,5 +1,5 @@
 import { Page } from "puppeteer-core";
-import { BaseScraper, JobLogger, SearchResultItem } from "./base.js";
+import { BaseScraper, JobLogger, SearchResultItem, ScraperFilters } from "./base.js";
 import { InterceptedResponse } from "../browser/manager.js";
 import { RawListing } from "../utils/validation.js";
 import { cleanString, cleanNumber, cleanInt, cleanEnergyRating, cleanPhotos, normalizePropertyType } from "../utils/validation.js";
@@ -12,6 +12,23 @@ export class ImmovlanScraper extends BaseScraper {
 
   getApiPattern(): string | RegExp {
     return /immovlan\.be.*\/search/;
+  }
+
+  buildSearchUrl(filters?: ScraperFilters): string {
+    let url = "https://www.immovlan.be/en/search?transactionType=FOR_SALE&propertyTypes=HOUSE,APARTMENT&page=1";
+    
+    if (filters?.city) {
+      url += `&location=${encodeURIComponent(filters.city)}`;
+    }
+    if (filters?.price_min) {
+      url += `&minPrice=${filters.price_min}`;
+    }
+    if (filters?.price_max) {
+      url += `&maxPrice=${filters.price_max}`;
+    }
+    
+    this.logger.info(`Built Immovlan search URL: ${url}`);
+    return url;
   }
 
   parseSearchResults(responses: InterceptedResponse[]): SearchResultItem[] {

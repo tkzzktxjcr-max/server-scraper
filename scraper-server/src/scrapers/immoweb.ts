@@ -1,5 +1,5 @@
 import { Page } from "puppeteer-core";
-import { BaseScraper, JobLogger, SearchResultItem } from "./base.js";
+import { BaseScraper, JobLogger, SearchResultItem, ScraperFilters } from "./base.js";
 import { InterceptedResponse } from "../browser/manager.js";
 import { RawListing } from "../utils/validation.js";
 import { cleanString, cleanNumber, cleanInt, cleanEnergyRating, cleanPhotos, normalizePropertyType } from "../utils/validation.js";
@@ -12,6 +12,33 @@ export class ImmowebScraper extends BaseScraper {
 
   getApiPattern(): string | RegExp {
     return /immoweb\.be.*\/search/;
+  }
+
+  buildSearchUrl(filters?: ScraperFilters): string {
+    let url = "https://www.immoweb.be/en/search/house-and-apartment/for-sale?countries=BE&page=1&orderBy=relevance";
+    
+    if (filters?.city) {
+      url += `&searchRadius=0&towns=${encodeURIComponent(filters.city)}`;
+    }
+    if (filters?.price_min) {
+      url += `&minPrice=${filters.price_min}`;
+    }
+    if (filters?.price_max) {
+      url += `&maxPrice=${filters.price_max}`;
+    }
+    if (filters?.type) {
+      const typeMap: Record<string, string> = {
+        apartment: "APARTMENT",
+        house: "HOUSE",
+        villa: "HOUSE",
+        studio: "APARTMENT",
+        commercial: "COMMERCIAL",
+      };
+      url += `&propertyTypes=${typeMap[filters.type] || "HOUSE,APARTMENT"}`;
+    }
+    
+    this.logger.info(`Built Immoweb search URL: ${url}`);
+    return url;
   }
 
   parseSearchResults(responses: InterceptedResponse[]): SearchResultItem[] {
@@ -43,7 +70,6 @@ export class ImmowebScraper extends BaseScraper {
   }
 
   async extractDetailData(responses: InterceptedResponse[], url: string): Promise<Partial<PropertyData>> {
-    // Try to extract from API responses first
     for (const response of responses) {
       try {
         const body = response.body as any;
@@ -77,7 +103,6 @@ export class ImmowebScraper extends BaseScraper {
       }
     }
 
-    // Fallback: scrape from page DOM
     return {};
   }
 }

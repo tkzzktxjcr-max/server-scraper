@@ -1,5 +1,5 @@
 import { Page } from "puppeteer-core";
-import { BaseScraper, JobLogger, SearchResultItem } from "./base.js";
+import { BaseScraper, JobLogger, SearchResultItem, ScraperFilters } from "./base.js";
 import { InterceptedResponse } from "../browser/manager.js";
 import { RawListing } from "../utils/validation.js";
 import { cleanString, cleanNumber, cleanInt, cleanEnergyRating, cleanPhotos, normalizePropertyType } from "../utils/validation.js";
@@ -12,6 +12,23 @@ export class ZimmoScraper extends BaseScraper {
 
   getApiPattern(): string | RegExp {
     return /zimmo\.be.*\/search/;
+  }
+
+  buildSearchUrl(filters?: ScraperFilters): string {
+    let url = "https://www.zimmo.be/nl/?pagina=1&transactionType=FOR_SALE";
+    
+    if (filters?.city) {
+      url += `&plaats=${encodeURIComponent(filters.city)}`;
+    }
+    if (filters?.price_min) {
+      url += `&prijsVan=${filters.price_min}`;
+    }
+    if (filters?.price_max) {
+      url += `&prijsTot=${filters.price_max}`;
+    }
+    
+    this.logger.info(`Built Zimmo search URL: ${url}`);
+    return url;
   }
 
   parseSearchResults(responses: InterceptedResponse[]): SearchResultItem[] {
