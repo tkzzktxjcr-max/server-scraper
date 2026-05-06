@@ -99,7 +99,7 @@ export async function runScraper(params: ScrapeParams): Promise<void> {
             agent_agency: detailData.agent_agency || "",
             amenities: [],
             energy_rating: detailData.energy_rating || "",
-            year_built: detailData.year_built || null,
+            year_built: detailData.year_built !== undefined ? detailData.year_built : null,
           };
 
           const result = await saveProperty(propertyData);

@@ -178,7 +178,7 @@ export interface PropertyData {
   agent_agency: string;
   amenities: string[];
   energy_rating: string;
-  year_built: number;
+  year_built: number | null;
 }
 
 /**
