@@ -3,7 +3,7 @@ import { ImmowebScraper } from "./immoweb.js";
 import { ImmovlanScraper } from "./immovlan.js";
 import { ZimmoScraper } from "./zimmo.js";
 import { browserPool, handleCookieConsent } from "../browser/manager.js";
-import { createJob, updateJobStatus, saveProperty, getSiteBySlug } from "../appwrite/client.js";
+import { createJob, updateJobStatus, saveProperty, getSiteBySlug, PropertyData } from "../appwrite/client.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 import { randomDelay } from "../utils/retry.js";
@@ -97,7 +97,7 @@ export async function runScraper(params: ScrapeParams): Promise<void> {
             agent_name: detailData.agent_name || "",
             agent_phone: detailData.agent_phone || "",
             agent_agency: detailData.agent_agency || "",
-            amenities: detailData.amenities || [],
+            amenities: [],
             energy_rating: detailData.energy_rating || "",
             year_built: detailData.year_built || null,
           };

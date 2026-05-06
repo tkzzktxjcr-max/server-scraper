@@ -37,7 +37,7 @@ export interface ScrapeResult {
 
 export abstract class BaseScraper {
   protected siteSlug: string;
-  protected baseUrl: string;
+  public baseUrl: string;
   protected logger: JobLogger;
 
   constructor(siteSlug: string, baseUrl: string, logger: JobLogger) {
