@@ -1,8 +1,5 @@
-import { Page } from "puppeteer-core";
+import { Page } from "playwright";
 import { BaseScraper, JobLogger, SearchResultItem, ScraperFilters } from "./base.js";
-import { InterceptedResponse } from "../browser/manager.js";
-import { RawListing } from "../utils/validation.js";
-import { cleanString, cleanNumber, cleanInt, cleanEnergyRating, cleanPhotos, normalizePropertyType } from "../utils/validation.js";
 import { PropertyData } from "../appwrite/client.js";
 
 export class ZimmoScraper extends BaseScraper {
@@ -10,88 +7,90 @@ export class ZimmoScraper extends BaseScraper {
     super("zimmo", "https://www.zimmo.be", logger);
   }
 
-  getApiPattern(): string | RegExp {
-    return /zimmo\.be.*\/search/;
-  }
-
   buildSearchUrl(filters?: ScraperFilters): string {
     let url = "https://www.zimmo.be/nl/?pagina=1&transactionType=FOR_SALE";
-    
-    if (filters?.city) {
-      url += `&plaats=${encodeURIComponent(filters.city)}`;
-    }
-    if (filters?.price_min) {
-      url += `&prijsVan=${filters.price_min}`;
-    }
-    if (filters?.price_max) {
-      url += `&prijsTot=${filters.price_max}`;
-    }
-    
-    this.logger.info(`Built Zimmo search URL: ${url}`);
+    if (filters?.city) url += `&plaats=${encodeURIComponent(filters.city)}`;
+    if (filters?.price_min) url += `&prijsVan=${filters.price_min}`;
+    if (filters?.price_max) url += `&prijsTot=${filters.price_max}`;
     return url;
   }
 
-  parseSearchResults(responses: InterceptedResponse[]): SearchResultItem[] {
-    const listings: SearchResultItem[] = [];
-    
-    for (const response of responses) {
-      try {
-        const body = response.body as any;
-        if (body?.results?.length) {
-          for (const item of body.results) {
-            listings.push({
-              source_id: String(item.id || ""),
-              url: item.url || `https://www.zimmo.be/nl/${item.id}`,
-              title: item.title || "",
-              price: cleanNumber(item.price || 0),
-              city: cleanString(item.city || ""),
-              type: normalizePropertyType(item.type || ""),
-              bedrooms: cleanInt(item.bedrooms || 0),
-              surface_sqm: cleanNumber(item.surface || 0),
-            });
-          }
-        }
-      } catch {
-        // Skip invalid responses
+  async extractListingsFromDom(page: Page): Promise<SearchResultItem[]> {
+    const selectors = [
+      '.property-card',
+      '.search-result',
+      '.listing-item',
+      '.result-item',
+      '[data-testid="property"]',
+    ];
+
+    for (const selector of selectors) {
+      const count = await page.locator(selector).count();
+      if (count > 0) {
+        this.logger.info(`Found ${count} cards with selector: ${selector}`);
+        return this.extractWithSelector(page, selector);
       }
     }
-    
-    return listings;
+
+    return page.evaluate(() => {
+      const listings: SearchResultItem[] = [];
+      const links = document.querySelectorAll('a');
+      const seen = new Set<string>();
+      
+      links.forEach(link => {
+        const href = (link as HTMLAnchorElement).href;
+        if (!href.match(/\d{5,}/)) return;
+        if (seen.has(href)) return;
+        seen.add(href);
+        
+        const container = link.closest('article, .card, .item, .result') || link.parentElement;
+        const title = container?.querySelector('h2, h3, .title')?.textContent?.trim() 
+          || link.getAttribute('title') 
+          || "";
+        
+        const priceText = container?.querySelector('.price')?.textContent?.trim() || "";
+        const price = parseInt(priceText.replace(/[^\d]/g, '')) || 0;
+        
+        const idMatch = href.match(/(\d{6,})/);
+        const source_id = idMatch ? idMatch[1] : "";
+        
+        if (source_id && title && price > 0) {
+          listings.push({ source_id, url: href, title, price, city: "", type: "house" });
+        }
+      });
+      return listings;
+    }) as Promise<SearchResultItem[]>;
   }
 
-  async extractDetailData(responses: InterceptedResponse[], url: string): Promise<Partial<PropertyData>> {
-    for (const response of responses) {
-      try {
-        const body = response.body as any;
-        if (body?.id || body?.property) {
-          return {
-            title: cleanString(body.title || ""),
-            description: cleanString(body.description || ""),
-            price: cleanNumber(body.price || 0),
-            surface_sqm: cleanNumber(body.surface || 0),
-            bedrooms: cleanInt(body.bedrooms || 0),
-            bathrooms: cleanInt(body.bathrooms || 0),
-            type: normalizePropertyType(body.type || ""),
-            city: cleanString(body.city || ""),
-            postal_code: cleanString(body.postalCode || ""),
-            province: cleanString(body.province || ""),
-            latitude: cleanNumber(body.latitude || 0),
-            longitude: cleanNumber(body.longitude || 0),
-            address: cleanString(body.address || ""),
-            photos: cleanPhotos(body.photos || []),
-            agent_name: cleanString(body.agent?.name || ""),
-            agent_phone: cleanString(body.agent?.phone || ""),
-            agent_agency: cleanString(body.agent?.agency || ""),
-            amenities: [],
-            energy_rating: cleanEnergyRating(body.energyRating || ""),
-            year_built: cleanInt(body.yearBuilt || 0) || null,
-          };
+  private async extractWithSelector(page: Page, selector: string): Promise<SearchResultItem[]> {
+    return page.evaluate((sel) => {
+      const listings: SearchResultItem[] = [];
+      document.querySelectorAll(sel).forEach(card => {
+        const link = card.querySelector('a') as HTMLAnchorElement | null;
+        const url = link?.href || "";
+        const idMatch = url.match(/(\d{6,})/);
+        const source_id = idMatch ? idMatch[1] : "";
+        const title = card.querySelector('h2, h3, .title')?.textContent?.trim() || "";
+        const priceText = card.querySelector('.price')?.textContent?.trim() || "";
+        const price = parseInt(priceText.replace(/[^\d]/g, '')) || 0;
+        const city = card.querySelector('.location, .city')?.textContent?.trim() || "";
+        
+        if (source_id && title && price > 0) {
+          listings.push({ source_id, url, title, price, city, type: "house" });
         }
-      } catch {
-        // Continue to next response
-      }
-    }
+      });
+      return listings;
+    }, selector) as Promise<SearchResultItem[]>;
+  }
 
-    return {};
+  async extractDetailFromDom(page: Page): Promise<Partial<PropertyData>> {
+    return page.evaluate(() => {
+      const result: Partial<PropertyData> = {};
+      result.title = document.querySelector('h1, .property-title')?.textContent?.trim() || "";
+      const priceText = document.querySelector('.price, .property-price')?.textContent?.trim() || "";
+      result.price = parseInt(priceText.replace(/[^\d]/g, '')) || 0;
+      result.description = document.querySelector('.description, .property-description')?.textContent?.trim() || "";
+      return result;
+    }) as Promise<Partial<PropertyData>>;
   }
 }

@@ -9,37 +9,21 @@ export const scrapeRouter = Router();
 
 scrapeRouter.post("/", async (req: Request, res: Response) => {
   try {
-    // Rate limiting
     const clientId = req.ip || "unknown";
     const rateLimitResult = checkRateLimit(clientId);
-
     if (!rateLimitResult.allowed) {
-      return res.status(429).json({
-        error: "Rate limit exceeded",
-        retryAfter: Math.ceil(rateLimitResult.resetIn / 1000),
-      });
+      return res.status(429).json({ error: "Rate limit exceeded", retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) });
     }
 
     const { source, trigger, filters } = req.body;
-
     if (!source || !trigger) {
-      return res.status(400).json({
-        error: "Missing required fields",
-        message: "source and trigger are required",
-      });
+      return res.status(400).json({ error: "Missing required fields", message: "source and trigger are required" });
     }
 
-    logger.info(`Scrape request received: ${source} (${trigger})`, { filters });
-
-    // Get or create site
     let site = await getSiteBySlug(source);
-    
     if (!site) {
-      // Create the site if it doesn't exist
-      logger.info(`Site ${source} not found, creating it...`);
       const { ID } = await import("appwrite");
-      
-      const siteData: Record<string, unknown> = {
+      const siteData = {
         name: source.charAt(0).toUpperCase() + source.slice(1),
         slug: source,
         base_url: `https://www.${source}.be`,
@@ -50,137 +34,54 @@ scrapeRouter.post("/", async (req: Request, res: Response) => {
         last_scrape_status: null,
         created_at: new Date().toISOString(),
       };
-
-      try {
-        site = await databases.createDocument(
-          APPWRITE_DATABASE_ID,
-          COLLECTIONS.SCRAPING_SITES,
-          ID.unique(),
-          siteData
-        );
-        logger.info(`Created site: ${source}`);
-      } catch (createError) {
-        logger.error(`Failed to create site ${source}:`, { error: createError instanceof Error ? createError.message : String(createError) });
-        return res.status(500).json({
-          error: "Failed to create site",
-          message: String(createError),
-        });
-      }
+      site = await databases.createDocument(APPWRITE_DATABASE_ID, COLLECTIONS.SCRAPING_SITES, ID.unique(), siteData);
     }
 
-    // Create job document in Appwrite
-    const jobId = await createJob({
-      siteId: site.$id,
-      trigger: trigger || "manual",
-      filters: filters || {},
-      createdBy: trigger === "agent" ? "hermes-agent" : "admin",
-    });
+    const jobId = await createJob({ siteId: site.$id, trigger: trigger || "manual", filters: filters || {}, createdBy: trigger === "agent" ? "hermes-agent" : "admin" });
+    jobQueue.add({ jobId, source, siteSlug: source, filters: filters || {}, trigger: trigger || "manual" });
 
-    // Add job to queue
-    jobQueue.add({
-      jobId,
-      source: source,
-      siteSlug: source,
-      filters: filters || {},
-      trigger: trigger || "manual",
-    });
-
-    logger.info(`Scrape job created and queued: ${jobId}`);
-
-    return res.status(202).json({
-      jobId,
-      status: "queued",
-      message: "Scrape job has been queued and will start shortly",
-      rateLimit: {
-        remaining: rateLimitResult.remaining,
-        resetIn: rateLimitResult.resetIn,
-      },
-    });
+    return res.status(202).json({ jobId, status: "queued", message: "Scrape job queued", rateLimit: { remaining: rateLimitResult.remaining, resetIn: rateLimitResult.resetIn } });
   } catch (error) {
-    logger.error("Failed to create scrape job", { error: error instanceof Error ? error.message : String(error) });
-    return res.status(500).json({
-      error: "Failed to create scrape job",
-      message: String(error),
-    });
+    return res.status(500).json({ error: "Failed to create scrape job", message: String(error) });
   }
 });
 
 scrapeRouter.post("/test", async (req: Request, res: Response) => {
   try {
     const { source, filters } = req.body;
-    
-    if (!source) {
-      return res.status(400).json({ error: "source is required" });
-    }
+    if (!source) return res.status(400).json({ error: "source is required" });
 
-    logger.info(`Running test scrape for: ${source}`);
-    
     const result = await runTestScrape(source, filters);
     
     return res.json({
-      success: !result.error,
+      success: !result.error && result.listingsFound > 0,
       ...result,
+      diagnostic: result.listingsFound === 0 ? {
+        tip: "0 listings found. Check screenshotPath on server to see what the bot sees. The site may block headless browsers.",
+        screenshot: result.screenshotPath || "No screenshot available",
+      } : undefined,
     });
   } catch (error) {
-    logger.error("Test scrape failed", { error: error instanceof Error ? error.message : String(error) });
-    return res.status(500).json({
-      error: "Test scrape failed",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    return res.status(500).json({ error: "Test scrape failed", message: error instanceof Error ? error.message : String(error) });
   }
 });
 
 scrapeRouter.get("/status/:id", async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-
-    if (!id) {
-      return res.status(400).json({
-        error: "Job ID is required",
-      });
-    }
-
-    const job = await getJob(id);
-
-    if (!job) {
-      return res.status(404).json({
-        error: "Job not found",
-        jobId: id,
-      });
-    }
-
-    const isQueued = jobQueue.isJobQueued(id);
-    const isRunning = jobQueue.isJobRunning(id);
-
+    const job = await getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
     return res.json({
-      jobId: job.$id,
-      status: job.status,
-      trigger: job.trigger,
-      filters: job.filters,
-      stats: job.stats,
-      started_at: job.started_at,
-      completed_at: job.completed_at,
-      error_message: job.error_message,
-      created_by: job.created_by,
-      queueStatus: {
-        isQueued,
-        isRunning,
-      },
+      jobId: job.$id, status: job.status, trigger: job.trigger, filters: job.filters,
+      stats: job.stats, started_at: job.started_at, completed_at: job.completed_at,
+      error_message: job.error_message, created_by: job.created_by,
+      queueStatus: { isQueued: jobQueue.isJobQueued(req.params.id), isRunning: jobQueue.isJobRunning(req.params.id) },
     });
   } catch (error) {
-    logger.error("Failed to get job status", { error: error instanceof Error ? error.message : String(error), jobId: req.params.id });
-    return res.status(500).json({
-      error: "Failed to get job status",
-      message: String(error),
-    });
+    return res.status(500).json({ error: "Failed to get job status", message: String(error) });
   }
 });
 
 scrapeRouter.get("/queue", async (_req: Request, res: Response) => {
   const status = jobQueue.getStatus();
-  return res.json({
-    running: status.running,
-    queued: status.queued,
-    maxConcurrent: 3,
-  });
+  return res.json({ running: status.running, queued: status.queued, maxConcurrent: 3 });
 });

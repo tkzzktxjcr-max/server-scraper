@@ -2,8 +2,8 @@ import { BaseScraper, ScraperFilters } from "./base.js";
 import { ImmowebScraper } from "./immoweb.js";
 import { ImmovlanScraper } from "./immovlan.js";
 import { ZimmoScraper } from "./zimmo.js";
-import { browserPool, handleCookieConsent } from "../browser/manager.js";
-import { updateJobStatus, saveProperty, getSiteBySlug, PropertyData } from "../appwrite/client.js";
+import { browserPool, handleCookieConsent, takeDebugScreenshot } from "../browser/playwright-manager.js";
+import { updateJobStatus, saveProperty } from "../appwrite/client.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 import { randomDelay } from "../utils/retry.js";
@@ -24,13 +24,10 @@ const SCRAPER_MAP: Record<ScraperSource, new (logger: any) => BaseScraper> = {
 
 export async function runScraper(params: ScrapeParams): Promise<void> {
   const { jobId, source, filters } = params;
-  
   logger.info(`Starting scraper: ${source}`, { jobId, filters });
 
   const scraperClass = SCRAPER_MAP[source];
-  if (!scraperClass) {
-    throw new Error(`Unknown scraper source: ${source}`);
-  }
+  if (!scraperClass) throw new Error(`Unknown scraper source: ${source}`);
 
   const jobLogger = {
     info: (msg: string, meta?: Record<string, unknown>) => logger.info(`[${jobId}] ${msg}`, meta),
@@ -41,35 +38,33 @@ export async function runScraper(params: ScrapeParams): Promise<void> {
   const scraper = new scraperClass(jobLogger);
 
   try {
-    // Update existing job to running
     await updateJobStatus(jobId, "running");
-
     const page = await browserPool.createPage();
     
     try {
       await handleCookieConsent(page);
-      
       const searchUrl = scraper.buildSearchUrl(filters);
       jobLogger.info(`Search URL: ${searchUrl}`);
       
       const searchResult = await scraper.scrapeSearchPage(page, searchUrl);
-      
-      jobLogger.info(`Found ${searchResult.totalFound} listings from search page`);
+      jobLogger.info(`Found ${searchResult.totalFound} listings`);
 
-      let newCount = 0;
-      let updatedCount = 0;
-      let failedCount = 0;
+      if (searchResult.totalFound === 0) {
+        const screenshotPath = await takeDebugScreenshot(page, `${source}-search-empty`);
+        jobLogger.warn(`0 listings found, screenshot saved: ${screenshotPath}`);
+      }
+
+      let newCount = 0, updatedCount = 0, failedCount = 0;
       const maxListings = Math.min(searchResult.listings.length, config.scraper.maxPages);
 
       for (let i = 0; i < maxListings; i++) {
         const listing = searchResult.listings[i];
         try {
           await randomDelay();
-          
-          jobLogger.info(`Processing listing ${i + 1}/${maxListings}: ${listing.url}`);
+          jobLogger.info(`Processing ${i + 1}/${maxListings}: ${listing.url}`);
           const detailData = await scraper.scrapeDetailPage(page, listing.url);
           
-          const propertyData: PropertyData = {
+          const propertyData = {
             site_id: source,
             source_id: listing.source_id,
             url: listing.url,
@@ -96,20 +91,11 @@ export async function runScraper(params: ScrapeParams): Promise<void> {
           };
 
           const result = await saveProperty(propertyData);
-          
-          if (result.isNew) {
-            newCount++;
-            jobLogger.info(`New property saved: ${result.propertyId}`);
-          } else {
-            updatedCount++;
-            jobLogger.info(`Property updated: ${result.propertyId}`);
-          }
+          if (result.isNew) newCount++;
+          else updatedCount++;
         } catch (error) {
           failedCount++;
-          jobLogger.error(`Failed to process listing`, { 
-            url: listing.url, 
-            error: error instanceof Error ? error.message : String(error) 
-          });
+          jobLogger.error(`Failed to process listing`, { url: listing.url, error: error instanceof Error ? error.message : String(error) });
         }
       }
 
@@ -120,17 +106,12 @@ export async function runScraper(params: ScrapeParams): Promise<void> {
         failed: failedCount,
       });
       
-      jobLogger.info(`Scrape completed: ${newCount} new, ${updatedCount} updated, ${failedCount} failed`);
-
+      jobLogger.info(`Completed: ${newCount} new, ${updatedCount} updated, ${failedCount} failed`);
     } finally {
       await browserPool.closePage(page);
     }
-
   } catch (error) {
-    jobLogger.error(`Scraper failed`, { 
-      error: error instanceof Error ? error.message : String(error) 
-    });
-    
+    jobLogger.error(`Scraper failed`, { error: error instanceof Error ? error.message : String(error) });
     await updateJobStatus(jobId, "failed", undefined, error instanceof Error ? error.message : String(error));
   }
 }
@@ -146,40 +127,35 @@ export async function runTestScrape(source: ScraperSource, filters?: ScraperFilt
     url: string;
   }>;
   detailSample: Record<string, unknown> | null;
+  screenshotPath?: string;
   error?: string;
 }> {
   const scraperClass = SCRAPER_MAP[source];
-  if (!scraperClass) {
-    throw new Error(`Unknown scraper source: ${source}`);
-  }
+  if (!scraperClass) throw new Error(`Unknown scraper source: ${source}`);
 
-  const testLogger = {
-    info: (msg: string) => logger.info(`[TEST] ${msg}`),
-    warn: (msg: string) => logger.warn(`[TEST] ${msg}`),
-    error: (msg: string) => logger.error(`[TEST] ${msg}`),
-  };
-
+  const testLogger = { info: (msg: string) => logger.info(`[TEST] ${msg}`), warn: () => {}, error: () => {} };
   const scraper = new scraperClass(testLogger);
   const page = await browserPool.createPage();
 
   try {
     await handleCookieConsent(page);
-    
     const searchUrl = scraper.buildSearchUrl(filters);
     logger.info(`[TEST] Search URL: ${searchUrl}`);
     
     const searchResult = await scraper.scrapeSearchPage(page, searchUrl);
     logger.info(`[TEST] Found ${searchResult.totalFound} listings`);
 
+    let screenshotPath: string | undefined;
+    if (searchResult.totalFound === 0) {
+      screenshotPath = await takeDebugScreenshot(page, `${source}-test-empty`);
+      logger.info(`[TEST] Screenshot saved: ${screenshotPath}`);
+    }
+
     let detailSample: Record<string, unknown> | null = null;
     if (searchResult.listings.length > 0) {
-      const firstListing = searchResult.listings[0];
-      logger.info(`[TEST] Testing detail page: ${firstListing.url}`);
-      try {
-        detailSample = await scraper.scrapeDetailPage(page, firstListing.url);
-      } catch (error) {
-        logger.error(`[TEST] Detail scrape failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      const first = searchResult.listings[0];
+      logger.info(`[TEST] Testing detail: ${first.url}`);
+      detailSample = await scraper.scrapeDetailPage(page, first.url);
     }
 
     return {
@@ -193,13 +169,16 @@ export async function runTestScrape(source: ScraperSource, filters?: ScraperFilt
         url: l.url,
       })),
       detailSample,
+      screenshotPath,
     };
   } catch (error) {
+    const screenshotPath = await takeDebugScreenshot(page, `${source}-test-error`);
     return {
       searchUrl: scraper.buildSearchUrl(filters),
       listingsFound: 0,
       sampleListings: [],
       detailSample: null,
+      screenshotPath,
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
