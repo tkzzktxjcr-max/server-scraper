@@ -1,0 +1,168 @@
+import { runScraper, ScrapeParams, ScraperSource } from "../scrapers/index.js";
+import { logger } from "../utils/logger.js";
+import { config } from "../config.js";
+
+// ─────────────────────────────────────────────
+// TYPE DEFINITIONS
+// ─────────────────────────────────────────────
+
+interface QueuedJob {
+  params: ScrapeParams;
+  addedAt: number;
+}
+
+export interface QueueJobParams {
+  jobId: string;
+  source: ScraperSource;
+  siteSlug?: string;
+  filters?: Record<string, unknown>;
+  trigger: "manual" | "agent" | "scheduled" | "realtime";
+}
+
+// ─────────────────────────────────────────────
+// JOB QUEUE CLASS
+// ─────────────────────────────────────────────
+
+class JobQueue {
+  private queue: QueuedJob[] = [];
+  private running: Set<string> = new Set();
+  private maxConcurrent: number;
+  private processorInterval: NodeJS.Timeout | null = null;
+
+  constructor(maxConcurrent: number = config.rateLimit.maxConcurrentJobs) {
+    this.maxConcurrent = maxConcurrent;
+  }
+
+  /**
+   * Add a job to the queue
+   */
+  add(params: QueueJobParams): void {
+    // Check if job already in queue or running
+    const isQueued = this.queue.some((q) => q.params.jobId === params.jobId);
+    const isRunning = this.running.has(params.jobId);
+
+    if (isQueued || isRunning) {
+      logger.warn(`Job ${params.jobId} is already queued or running`);
+      return;
+    }
+
+    // Convert to ScrapeParams
+    const scrapeParams: ScrapeParams = {
+      jobId: params.jobId,
+      source: params.source,
+      filters: params.filters,
+    };
+
+    this.queue.push({
+      params: scrapeParams,
+      addedAt: Date.now(),
+    });
+
+    logger.info(`Job ${params.jobId} added to queue`, { 
+      source: params.source,
+      trigger: params.trigger,
+      queueSize: this.queue.length 
+    });
+    
+    // Start processor if not running
+    if (!this.processorInterval) {
+      this.start();
+    }
+  }
+
+  /**
+   * Process the next job in the queue
+   */
+  private async processNext(): Promise<void> {
+    if (this.running.size >= this.maxConcurrent) {
+      return; // Max concurrent jobs reached
+    }
+
+    const job = this.queue.shift();
+    if (!job) {
+      return; // Queue is empty
+    }
+
+    this.running.add(job.params.jobId);
+    
+    logger.info(`Starting job ${job.params.jobId}`, { 
+      source: job.params.source,
+      running: this.running.size,
+      queued: this.queue.length 
+    });
+
+    // Run the scraper
+    try {
+      await runScraper(job.params);
+    } catch (error) {
+      logger.error(`Job ${job.params.jobId} failed`, { error });
+    } finally {
+      this.running.delete(job.params.jobId);
+    }
+  }
+
+  /**
+   * Start the queue processor
+   */
+  private start(): void {
+    if (this.processorInterval) return;
+
+    this.processorInterval = setInterval(async () => {
+      while (this.running.size < this.maxConcurrent && this.queue.length > 0) {
+        await this.processNext();
+      }
+
+      // Stop interval if queue is empty and no jobs running
+      if (this.queue.length === 0 && this.running.size === 0) {
+        this.stop();
+      }
+    }, 1000);
+  }
+
+  /**
+   * Stop the queue processor
+   */
+  private stop(): void {
+    if (this.processorInterval) {
+      clearInterval(this.processorInterval);
+      this.processorInterval = null;
+    }
+  }
+
+  /**
+   * Get queue status
+   */
+  getStatus(): { running: number; queued: number } {
+    return {
+      running: this.running.size,
+      queued: this.queue.length,
+    };
+  }
+
+  /**
+   * Check if a job is currently running
+   */
+  isJobRunning(jobId: string): boolean {
+    return this.running.has(jobId);
+  }
+
+  /**
+   * Check if a job is queued
+   */
+  isJobQueued(jobId: string): boolean {
+    return this.queue.some((q) => q.params.jobId === jobId);
+  }
+
+  /**
+   * Get all queued jobs
+   */
+  getQueuedJobs(): Array<{ jobId: string; addedAt: number }> {
+    return this.queue.map((q) => ({
+      jobId: q.params.jobId,
+      addedAt: q.addedAt,
+    }));
+  }
+}
+
+// Singleton instance
+export const jobQueue = new JobQueue();
