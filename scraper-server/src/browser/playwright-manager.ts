@@ -70,6 +70,15 @@ class PlaywrightBrowserPool {
       if (old) await old.close().catch(() => {});
     }
 
+    const proxySettings: Record<string, string | undefined> | undefined =
+      config.proxy.enabled && config.proxy.url
+        ? {
+            server: config.proxy.url,
+            username: config.proxy.username || undefined,
+            password: config.proxy.password || undefined,
+          }
+        : undefined;
+
     const context = await browser.newContext({
       userAgent: getRandomUserAgent(),
       viewport: { width: 1920, height: 1080 },
@@ -79,6 +88,7 @@ class PlaywrightBrowserPool {
       hasTouch: false,
       isMobile: false,
       javaScriptEnabled: true,
+      proxy: proxySettings,
       extraHTTPHeaders: {
         "Accept-Language": "en-US,en;q=0.9,nl;q=0.8,fr;q=0.7",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
