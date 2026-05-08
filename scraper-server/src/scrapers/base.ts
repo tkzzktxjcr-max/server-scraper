@@ -53,7 +53,10 @@ export abstract class BaseScraper {
   async scrapeSearchPage(page: Page, searchUrl: string): Promise<ScrapeResult> {
     this.logger.info(`Navigating to: ${searchUrl}`);
     
-    // Navigate first
+    // ── FIX: Set up API interception FIRST, before navigation ──
+    const apiPromise = this.interceptApiListings(page, 15000);
+    
+    // Navigate
     try {
       await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
     } catch (error) {
@@ -78,12 +81,12 @@ export abstract class BaseScraper {
     // Wait for content to settle
     await page.waitForTimeout(5000);
     
-    // Scroll to trigger lazy loading
+    // Scroll to trigger lazy loading (and trigger more API calls)
     await scrollToBottom(page);
     await page.waitForTimeout(3000);
     
-    // Try API interception - set up listener NOW and wait for responses
-    let listings = await this.interceptApiListings(page, 8000);
+    // Await API interception results
+    let listings = await apiPromise;
     this.logger.info(`API interception found ${listings.length} listings`);
     
     // Fallback to DOM extraction

@@ -74,7 +74,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3001
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 ENV BROWSER_HEADLESS=true
 
 # Copy built application from builder
