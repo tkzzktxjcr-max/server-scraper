@@ -1,0 +1,44 @@
+# ─────────────────────────────────────────────
+# SCRAPER SERVER DOCKER COMPOSE
+# Optimized for Coolify deployment
+# ─────────────────────────────────────────────
+
+services:
+  scraper-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scraper-server
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      # Appwrite Configuration
+      - APPWRITE_ENDPOINT=${APPWRITE_ENDPOINT}
+      - APPWRITE_PROJECT=${APPWRITE_PROJECT}
+      - APPWRITE_API_KEY=${APPWRITE_API_KEY}
+      - APPWRITE_DATABASE_ID=${APPWRITE_DATABASE_ID}
+      # Server Configuration
+      - NODE_ENV=production
+      - PORT=3001
+      # Browser (Puppeteer) Configuration
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+      - BROWSER_HEADLESS=true
+      - BROWSER_TIMEOUT=60000
+      - BROWSER_MAX_PAGES=5
+      # Rate Limiting Configuration
+      - REQUEST_DELAY_MS=2000
+      - MAX_CONCURRENT_JOBS=3
+      - RATE_LIMIT_WINDOW_MS=60000
+      - RATE_LIMIT_MAX_REQUESTS=10
+    # Health check (Coolify uses this automatically)
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  default:
+    name: scraper-network
