@@ -82,7 +82,7 @@ export class ImmowebScraper extends BaseScraper {
           i.city || 
           (i.location as Record<string, unknown>)?.city || 
           (i.address as Record<string, unknown>)?.city || 
-          (i.property as Record<string, unknown>)?.location?.city || 
+          ((i.property as Record<string, unknown>)?.location as Record<string, unknown>)?.city || 
           ""
         );
         
