@@ -2,13 +2,14 @@ import { BaseScraper, ScraperFilters } from "./base.js";
 import { ImmowebScraper } from "./immoweb.js";
 import { ImmovlanScraper } from "./immovlan.js";
 import { ZimmoScraper } from "./zimmo.js";
+import { EraScraper } from "./era.js";
 import { browserPool, handleCookieConsent, takeDebugScreenshot } from "../browser/playwright-manager.js";
 import { updateJobStatus, saveProperty, getSiteBySlug } from "../appwrite/client.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 import { randomDelay } from "../utils/retry.js";
 
-export type ScraperSource = "immoweb" | "immovlan" | "zimmo";
+export type ScraperSource = "immoweb" | "immovlan" | "zimmo" | "era";
 
 export interface ScrapeParams {
   jobId: string;
@@ -20,6 +21,7 @@ const SCRAPER_MAP: Record<ScraperSource, new (logger: any) => BaseScraper> = {
   immoweb: ImmowebScraper,
   immovlan: ImmovlanScraper,
   zimmo: ZimmoScraper,
+  era: EraScraper,
 };
 
 export async function runScraper(params: ScrapeParams): Promise<void> {

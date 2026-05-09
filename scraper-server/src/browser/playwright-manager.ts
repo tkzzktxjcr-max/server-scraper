@@ -70,12 +70,12 @@ class PlaywrightBrowserPool {
       if (old) await old.close().catch(() => {});
     }
 
-    const proxySettings: Record<string, string | undefined> | undefined =
+    const proxySettings: { server: string; username?: string; password?: string } | undefined =
       config.proxy.enabled && config.proxy.url
         ? {
             server: config.proxy.url,
-            username: config.proxy.username || undefined,
-            password: config.proxy.password || undefined,
+            ...(config.proxy.username ? { username: config.proxy.username } : {}),
+            ...(config.proxy.password ? { password: config.proxy.password } : {}),
           }
         : undefined;
 
