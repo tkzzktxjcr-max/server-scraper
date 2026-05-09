@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+debug-screenshots/
+.env
+.env.local
+*.tsbuildinfo
+.DS_Store
+*.png
+test-*.ts
+test-*.py
