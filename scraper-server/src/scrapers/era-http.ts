@@ -1,8 +1,8 @@
 /**
- * ERA HTTP-only scraper — no Playwright, pure HTTP requests.
- * Uses ERA sitemap.xml to discover all city listing pages, then parses
- * the HTML with cheerio-like regex extraction.
+ * ERA HTTP-only scraper — robust parsing with cheerio + JSON-LD.
+ * No Playwright needed. Works from any IP (cloud included).
  */
+import * as cheerio from "cheerio";
 import { ScraperFilters, JobLogger, SearchResultItem } from "./base.js";
 import { PropertyData } from "../appwrite/client.js";
 
@@ -18,142 +18,182 @@ export class EraHttpScraper {
   private async httpGet(url: string): Promise<string> {
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,nl;q=0.8",
+        "Accept-Language": "nl;q=0.9,en;q=0.8",
       },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} on ${url}`);
     return res.text();
   }
 
-  /**
-   * Fetch sitemap index, return all "te-koop" sub-sitemap URLs.
-   */
+  // ─── SITEMAP DISCOVERY ───
+
   async getSitemapPages(): Promise<string[]> {
     this.logger.info("Fetching ERA sitemap index...");
     const xml = await this.httpGet(this.sitemapUrl);
-    // Parse sitemapindex → loc
     const urls: string[] = [];
-    const matches = xml.matchAll(/<loc>([^<]+)<\/loc>/g);
-    for (const match of matches) {
-      const url = match[1];
-      if (url.includes("sitemap.xml?page=")) urls.push(url);
+    for (const match of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) {
+      if (match[1].includes("sitemap.xml?page=")) urls.push(match[1]);
     }
     this.logger.info(`Found ${urls.length} sitemap pages`);
     return urls;
   }
 
-  /**
-   * From a sitemap page, extract all "te-koop/{city}" URLs.
-   */
   async getCityUrls(sitemapPageUrl: string): Promise<string[]> {
     const xml = await this.httpGet(sitemapPageUrl);
     const urls: string[] = [];
-    const matches = xml.matchAll(/<loc>([^<]+)<\/loc>/g);
-    for (const match of matches) {
-      const url = match[1];
-      if (url.includes("/te-koop/")) urls.push(url);
+    for (const match of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) {
+      if (match[1].includes("/te-koop/")) urls.push(match[1]);
     }
     return urls;
   }
 
-  /**
-   * Scrape a single ERA city page (e.g. /nl/te-koop/brussel) for listings.
-   */
-  async scrapeCityPage(url: string): Promise<SearchResultItem[]> {
-    this.logger.info(`Fetching city page: ${url}`);
-    const html = await this.httpGet(url);
+  // ─── CITY PAGE SCRAPING (cheerio) ───
 
+  async scrapeCityPage(url: string): Promise<SearchResultItem[]> {
+    this.logger.info(`Fetching city: ${url}`);
+    const html = await this.httpGet(url);
+    const $ = cheerio.load(html);
     const listings: SearchResultItem[] = [];
     const seen = new Set<string>();
 
-    // ERA city pages have listing cards in <article> or div containers
-    // Strategy: find all links to /nl/te-koop/detail/xxx and extract nearby text
-    const linkPattern = /href="(\/nl\/te-koop\/[^"]+)"/g;
-    const pricePattern = /(€\s*[\d\s.,]+)/g;
+    // Strategy: iterate over article.node--property containers first
+    $("article.node--property").each((_, article) => {
+      // Link to detail page
+      const linkEl = $(article).find("a[href*='/te-koop/']").first();
+      const href = linkEl.attr("href") || "";
+      const parts = href.split("/").filter(Boolean);
+      if (parts.length < 5) return;
 
-    // Simple approach: split by article/div and extract per-card
-    const cardChunks = html.split(/<article|<div class="[^"]*(?:card|teaser|property|listing)[^"]*"/i);
+      const fullUrl = href.startsWith("http") ? href : this.baseUrl + href;
+      if (seen.has(fullUrl)) return;
+      seen.add(fullUrl);
 
-    for (const chunk of cardChunks.slice(1)) {
-      const linkMatch = chunk.match(/href="(\/nl\/te-koop\/[^"]+)"/);
-      if (!linkMatch) continue;
-      const link = this.baseUrl + linkMatch[1];
+      // City & type from URL
+      const city = parts[2] ? this.capitalize(parts[2].replace(/-/g, " ")) : "";
+      const type = this.normalizeType(parts[3] || "house");
 
-      if (seen.has(link)) continue;
-      seen.add(link);
+      // Price: div.field--price inside this article
+      let price = 0;
+      const priceEl = $(article).find("div.field--price").first();
+      if (priceEl.length) {
+        const priceText = priceEl.text().trim();
+        const m = priceText.match(/([\d\s.]+)/);
+        if (m) price = parseInt(m[1].replace(/[\s.]/g, ""), 10) || 0;
+      }
 
-      const priceMatch = chunk.match(/(€\s*[\d\s.,]+)/);
-      const price = priceMatch ? parseInt(priceMatch[1].replace(/[^\d]/g, "")) : 0;
+      // Title: from image alt or heading
+      const title = $(article).find("img").first().attr("alt") || ""
+        || $(article).find("h2, h3").first().text().trim()
+        || parts[4]?.replace(/-/g, " ") || "";
 
-      // Title: try h2/h3 content, or alt text of image
-      const titleMatch = chunk.match(/<h[23][^>]*>(.*?)<\/h[23]>/i);
-      const altMatch = chunk.match(/alt="([^"]{10,})"/);
-      const title = titleMatch
-        ? this.stripHtml(titleMatch[1])
-        : altMatch
-          ? altMatch[1]
-          : "";
-
-      // City from URL: /nl/te-koop/city-name → city-name
-      const cityMatch = link.match(/\/te-koop\/([^/]+)/);
-      const city = cityMatch ? this.capitalize(cityMatch[1].replace(/-/g, " ")) : "";
-
-      // Extract source_id from URL
-      const idMatch = link.match(/-(\d+)$/);
-      const source_id = idMatch ? idMatch[1] : link.split("/").pop() || "";
+      // Source ID: last URL segment
+      const source_id = parts[parts.length - 1] || "";
 
       if (source_id && (title || price > 0)) {
-        listings.push({
-          source_id,
-          url: link,
-          title,
-          price,
-          city,
-          type: "house",
-        });
+        listings.push({ source_id, url: fullUrl, title, price, city, type });
       }
-    }
+    });
 
     this.logger.info(`Scraped ${listings.length} listings from ${url}`);
     return listings;
   }
 
-  /**
-   * Scrape detail page for full property data.
-   */
+  // ─── DETAIL PAGE SCRAPING (JSON-LD + cheerio) ───
+
   async scrapeDetailPage(url: string): Promise<Partial<PropertyData>> {
     this.logger.info(`Fetching detail: ${url}`);
     const html = await this.httpGet(url);
+    const $ = cheerio.load(html);
 
-    const title = this.extractMeta(html, "og:title") || this.extractBetween(html, "<h1", "</h1>");
-    const desc = this.extractMeta(html, "og:description") || "";
-    const price = this.extractPrice(html);
-    const city = this.extractMeta(html, "og:locality") || "";
+    // ── 1. Extract JSON-LD (most reliable) ──
+    let jsonLd: any = null;
+    $('script[type="application/ld+json"]').each((_, el) => {
+      if (jsonLd) return;
+      try {
+        const data = JSON.parse($(el).html() || "");
+        if (data["@type"] === "Residence") jsonLd = data;
+        // Handle @graph arrays
+        if (data["@graph"]) {
+          for (const item of data["@graph"]) {
+            if (item["@type"] === "Residence" || item.headline) jsonLd = item;
+          }
+        }
+      } catch {}
+    });
 
-    // Surface, bedrooms from description text
-    const surfaceMatch = html.match(/(\d+(?:[.,]\d+)?)\s*m²/i);
-    const bedMatch = html.match(/(\d+)\s*slaapkamer/i);
-    const bathMatch = html.match(/(\d+)\s*badkamer/i);
+    // ── 2. Build result from JSON-LD ──
+    const result: Partial<PropertyData> = {};
 
-    return {
-      title,
-      description: desc,
-      price,
-      surface_sqm: surfaceMatch ? parseFloat(surfaceMatch[1].replace(",", ".")) : 0,
-      bedrooms: bedMatch ? parseInt(bedMatch[1]) : 0,
-      bathrooms: bathMatch ? parseInt(bathMatch[1]) : 0,
-      city,
-      address: city,
-      photos: this.extractImages(html),
-      type: "house",
-    };
+    if (jsonLd) {
+      result.title = jsonLd.name || jsonLd.headline || "";
+      result.description = jsonLd.description || $('meta[property="og:description"]').attr("content") || "";
+
+      // Address from JSON-LD
+      const addr = jsonLd.address;
+      if (addr && typeof addr === "object") {
+        result.address = `${addr.streetAddress || ""}, ${addr.postalCode || ""} ${addr.addressLocality || ""}`;
+        result.city = addr.addressLocality || "";
+        result.postal_code = addr.postalCode || "";
+      }
+
+      // Bedrooms/bathrooms
+      result.bedrooms = jsonLd.numberOfBedrooms || 0;
+      result.bathrooms = jsonLd.numberOfBathroomsTotal || 0;
+
+      // Surface
+      const floorSize = jsonLd.floorSize;
+      if (floorSize && typeof floorSize === "object") {
+        result.surface_sqm = parseFloat(floorSize.value) || 0;
+      }
+    }
+
+    // ── 3. Fallbacks from meta/DOM ──
+    if (!result.title) result.title = $("h1").first().text().trim() || $('meta[property="og:title"]').attr("content") || "";
+    if (!result.description) result.description = $('meta[property="og:description"]').attr("content") || "";
+    if (!result.city) result.city = $("address, [class*='address']").first().text().trim();
+
+    // Price
+    result.price = this.extractPrice($);
+
+    // Surface from body text (fallback)
+    if (!result.surface_sqm) {
+      const bodyText = $("body").text();
+      const surfaceMatch = bodyText.match(/(\d+(?:[.,]\d+)?)\s*m²/i);
+      result.surface_sqm = surfaceMatch ? parseFloat(surfaceMatch[1].replace(",", ".")) : 0;
+    }
+
+    // Bedrooms/bathrooms from body (fallback)
+    if (!result.bedrooms) {
+      const bodyText = $("body").text();
+      const bedMatch = bodyText.match(/(\d+)\s*slaapkamer/i);
+      result.bedrooms = bedMatch ? parseInt(bedMatch[1]) : 0;
+    }
+    if (!result.bathrooms) {
+      const bodyText = $("body").text();
+      const bathMatch = bodyText.match(/(\d+)\s*badkamer/i);
+      result.bathrooms = bathMatch ? parseInt(bathMatch[1]) : 0;
+    }
+
+    // EPC rating
+    const bodyText = $("body").text();
+    const epcMatch = bodyText.match(/(?:EPC|energieklasse|score)[:\s]*([A-G])/i);
+    result.energy_rating = epcMatch ? epcMatch[1].toUpperCase() : "";
+
+    // Type from URL
+    const urlParts = url.split("/").filter(Boolean);
+    const typePart = urlParts[urlParts.length - 2] || "house";
+    result.type = this.normalizeType(typePart);
+
+    // Photos
+    result.photos = this.extractImages($);
+
+    return result;
   }
 
-  /**
-   * Main entry: scrape all ERA listings via sitemap + HTTP.
-   */
+  // ─── MAIN ENTRY ───
+
   async run(filters?: ScraperFilters): Promise<{
     listings: SearchResultItem[];
     totalFound: number;
@@ -162,22 +202,20 @@ export class EraHttpScraper {
     const seenIds = new Set<string>();
 
     const sitemapPages = await this.getSitemapPages();
-    const maxSitemaps = 2; // Limit to 2 sitemap pages for safety (2000 cities × 2)
+    const maxSitemaps = Math.min(sitemapPages.length, 3);
 
     for (const sitemapPage of sitemapPages.slice(0, maxSitemaps)) {
       const cityUrls = await this.getCityUrls(sitemapPage);
       this.logger.info(`Sitemap ${sitemapPage}: ${cityUrls.length} cities`);
 
-      // Filter by city if requested
       const filteredCities = filters?.city
         ? cityUrls.filter((u) => u.toLowerCase().includes(filters.city!.toLowerCase()))
         : cityUrls;
 
-      // Limit cities per run
-      const maxCities = 5;
+      const maxCities = 10;
       for (const cityUrl of filteredCities.slice(0, maxCities)) {
         try {
-          await new Promise((r) => setTimeout(r, 2000 + Math.random() * 2000)); // 2-4s delay
+          await new Promise((r) => setTimeout(r, 2000 + Math.random() * 2000));
           const listings = await this.scrapeCityPage(cityUrl);
           for (const l of listings) {
             if (!seenIds.has(l.source_id)) {
@@ -186,9 +224,7 @@ export class EraHttpScraper {
             }
           }
         } catch (e) {
-          this.logger.warn(`Failed city ${cityUrl}`, {
-            error: e instanceof Error ? e.message : String(e),
-          });
+          this.logger.warn(`Failed city ${cityUrl}`, { error: e instanceof Error ? e.message : String(e) });
         }
       }
     }
@@ -198,64 +234,47 @@ export class EraHttpScraper {
 
   // ─── HELPERS ───
 
-  private stripHtml(raw: string): string {
-    return raw.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  private extractPrice($: cheerio.CheerioAPI): number {
+    let price = 0;
+    $("*").each((_, el) => {
+      if (price) return;
+      const text = $(el).text().trim();
+      const m = text.match(/^€\s*([\d\s.]+)$/);
+      if (m) price = parseInt(m[1].replace(/[\s.]/g, ""), 10) || 0;
+    });
+    if (!price) {
+      const content = $('meta[property="product:price:amount"]').attr("content");
+      if (content) price = parseInt(content.replace(/[^\d]/g, ""), 10) || 0;
+    }
+    return price;
+  }
+
+  private extractImages($: cheerio.CheerioAPI): string[] {
+    const imgs: string[] = [];
+    // OG image first
+    const ogImg = $('meta[property="og:image"]').attr("content");
+    if (ogImg) imgs.push(ogImg);
+    // Then gallery images
+    $("img").each((_, el) => {
+      const src = $(el).attr("src") || $(el).attr("data-src") || "";
+      if (src.includes("era.be") && (src.includes("property") || src.includes("styles")) && !src.includes("logo") && !src.includes("mapbox")) {
+        imgs.push(src);
+      }
+    });
+    return [...new Set(imgs)].filter((u) => u.startsWith("http"));
   }
 
   private capitalize(str: string): string {
-    return str
-      .split(" ")
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(" ");
+    return str.split(" ").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
   }
 
-  private extractMeta(html: string, property: string): string {
-    const match = html.match(
-      new RegExp(
-        `<meta[^>]+property="${property}"[^>]+content="([^"]+)"`,
-        "i"
-      )
-    );
-    return match ? match[1] : "";
-  }
-
-  private extractBetween(html: string, start: string, end: string): string {
-    const idx = html.indexOf(start);
-    if (idx === -1) return "";
-    const startIdx = html.indexOf(">", idx) + 1;
-    const endIdx = html.indexOf(end, startIdx);
-    return endIdx > startIdx ? this.stripHtml(html.slice(startIdx, endIdx)) : "";
-  }
-
-  private extractPrice(html: string): number {
-    // Look for price patterns near meta or in body
-    const patterns = [
-      /property="product:price:amount"[^>]+content="([\d.]+)"/i,
-      /class="[^"]*price[^"]*"[^}]*\u003e\s*([\d\s.,]+)\s*€/i,
-      /€\s*([\d\s.,]+)/,
-    ];
-    for (const p of patterns) {
-      const m = html.match(p);
-      if (m) {
-        const clean = m[1].replace(/[^\d]/g, "");
-        if (clean) return parseInt(clean);
-      }
-    }
-    return 0;
-  }
-
-  private extractImages(html: string): string[] {
-    const imgs: string[] = [];
-    const matches = html.matchAll(
-      /property="og:image"[^>]+content="([^"]+)"/g
-    );
-    for (const m of matches) imgs.push(m[1]);
-    if (imgs.length === 0) {
-      const altMatches = html.matchAll(
-        /class="[^"]*gallery[^"]*"[^}]*src="([^"]+)"/gi
-      );
-      for (const m of altMatches) imgs.push(m[1]);
-    }
-    return imgs.filter((u) => u.startsWith("http"));
+  private normalizeType(raw: string): string {
+    const lower = raw.toLowerCase();
+    if (lower.includes("appartement") || lower.includes("apartment") || lower.includes("flat")) return "apartment";
+    if (lower.includes("villa")) return "villa";
+    if (lower.includes("studio")) return "studio";
+    if (lower.includes("handel") || lower.includes("commercial") || lower.includes("bureau")) return "commercial";
+    if (lower.includes("huis") || lower.includes("woning") || lower.includes("house") || lower.includes("maison")) return "house";
+    return "house";
   }
 }

@@ -1,10 +1,11 @@
+/**
+ * Immotop.be HTTP-only scraper with cheerio parsing.
+ * Accessible from cloud IPs without proxy.
+ */
+import * as cheerio from "cheerio";
 import { ScraperFilters, JobLogger, SearchResultItem } from "./base.js";
 import { PropertyData } from "../appwrite/client.js";
 
-/**
- * Immotop.be HTTP-only scraper — no Playwright needed.
- * The site serves server-rendered HTML with property listings.
- */
 export class ImmotopScraper {
   private logger: JobLogger;
   private baseUrl = "https://www.immotop.be";
@@ -17,9 +18,8 @@ export class ImmotopScraper {
     let url = `${this.baseUrl}/te-koop`;
     const params = new URLSearchParams();
     if (filters?.city) params.set("location", filters.city);
-    if (filters?.price_min) params.set("price_min", String(filters.price_min));
-    if (filters?.price_max) params.set("price_max", String(filters.price_max));
-    if (filters?.type) params.set("type", filters.type);
+    if (filters?.price_min) params.set("minPrice", String(filters.price_min));
+    if (filters?.price_max) params.set("maxPrice", String(filters.price_max));
     const qs = params.toString();
     return qs ? `${url}?${qs}` : url;
   }
@@ -28,9 +28,8 @@ export class ImmotopScraper {
     const res = await fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,nl;q=0.8",
-        "Cache-Control": "max-age=0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "nl;q=0.9,en;q=0.8",
       },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} on ${url}`);
@@ -40,64 +39,44 @@ export class ImmotopScraper {
   async extractListings(url: string): Promise<SearchResultItem[]> {
     this.logger.info(`Fetching: ${url}`);
     const html = await this.httpGet(url);
-
+    const $ = cheerio.load(html);
     const listings: SearchResultItem[] = [];
     const seen = new Set<string>();
 
-    // Immotop listings are in cards with specific structure
-    // Strategy: find all property links and surrounding context
-    const cardRegex = /<div[^}]*class="[^"]*(?:listing|property|card|result|item)[^"]*"[^}]*>([\s\S]*?)<\/div>/gi;
-    let match: RegExpExecArray | null;
+    // Look for listing links
+    $("a[href]").each((_, el) => {
+      const href = $(el).attr("href") || "";
+      if (!href.includes("detail") && !href.includes("annonce") && !href.includes("property")) return;
+      if (seen.has(href)) return;
+      seen.add(href);
 
-    while ((match = cardRegex.exec(html)) !== null) {
-      const chunk = match[1];
+      const fullUrl = href.startsWith("http") ? href : this.baseUrl + href;
+      const container = $(el).closest("div, article, section, li");
 
-      const linkMatch = chunk.match(/href="(\/[^"]*(?:detail|annonce|property|listing)[^"]*)"/i);
-      if (!linkMatch) continue;
-      const link = this.baseUrl + linkMatch[1];
-      if (seen.has(link)) continue;
-      seen.add(link);
+      // Price
+      let price = 0;
+      container.find("*").each((_, child) => {
+        const text = $(child).text().trim();
+        const m = text.match(/(\d{3}[\.\s]?\d{3})\s*€/);
+        if (m && !price) price = parseInt(m[1].replace(/[\s.]/g, ""), 10) || 0;
+      });
 
-      const priceMatch = chunk.match(/(\d[\d\s.,]*)\s*€/);
-      const price = priceMatch ? parseInt(priceMatch[1].replace(/[^\d]/g, "")) : 0;
+      // Title
+      const title = container.find("h2, h3, h4").first().text().trim()
+        || $(el).find("img").attr("alt") || ""
+        || $(el).text().trim().substring(0, 100);
 
-      const titleMatch = chunk.match(/<h[23][^>]*>(.*?)<\/h[23]>/i);
-      const title = titleMatch ? this.stripHtml(titleMatch[1]) : "";
+      // City
+      const city = container.find("[class*='city'], [class*='location'], [class*='gemeente']").text().trim();
 
-      const cityMatch = chunk.match(/(?:in|te|à)\s+([A-Za-z\s-]+)/i) || chunk.match(/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*),?\s*\d{4}/);
-      const city = cityMatch ? cityMatch[1].trim() : "";
-
-      const idMatch = link.match(/(\d+)/);
-      const source_id = idMatch ? idMatch[1] : link.split("/").pop() || "";
+      // Source ID from URL
+      const idMatch = fullUrl.match(/(\d{4,})/);
+      const source_id = idMatch ? idMatch[1] : fullUrl.split("/").pop() || "";
 
       if (source_id && (title || price > 0)) {
-        listings.push({ source_id, url: link, title, price, city, type: "house" });
+        listings.push({ source_id, url: fullUrl, title, price, city, type: "house" });
       }
-    }
-
-    // Fallback: if no cards found, search all links with prices
-    if (listings.length === 0) {
-      const linkMatches = html.matchAll(/href="(\/[^"]*(?:detail|annonce)[^"]*)"/gi);
-      for (const lm of linkMatches) {
-        const link = this.baseUrl + lm[1];
-        if (seen.has(link)) continue;
-        seen.add(link);
-
-        const priceNear = html.substring(
-          Math.max(0, html.indexOf(lm[0]) - 300),
-          html.indexOf(lm[0]) + 300
-        );
-        const priceMatch = priceNear.match(/(\d[\d\s.,]*)\s*€/);
-        const price = priceMatch ? parseInt(priceMatch[1].replace(/[^\d]/g, "")) : 0;
-
-        const idMatch = link.match(/(\d+)/);
-        const source_id = idMatch ? idMatch[1] : "";
-
-        if (source_id && price > 0) {
-          listings.push({ source_id, url: link, title: "", price, city: "", type: "house" });
-        }
-      }
-    }
+    });
 
     this.logger.info(`Found ${listings.length} listings`);
     return listings;
@@ -106,64 +85,80 @@ export class ImmotopScraper {
   async scrapeDetailPage(url: string): Promise<Partial<PropertyData>> {
     this.logger.info(`Fetching detail: ${url}`);
     const html = await this.httpGet(url);
+    const $ = cheerio.load(html);
+    const bodyText = $("body").text();
 
-    const title = this.extractMeta(html, "og:title") || this.extractBetween(html, "<h1", "</h1>");
-    const desc = this.extractMeta(html, "og:description") || "";
-    const price = this.extractPrice(html);
+    // JSON-LD extraction
+    let jsonLd: any = null;
+    $('script[type="application/ld+json"]').each((_, el) => {
+      if (jsonLd) return;
+      try {
+        const data = JSON.parse($(el).html() || "");
+        if (data["@type"] === "Residence" || data["@type"] === "RealEstateListing") jsonLd = data;
+        if (data["@graph"]) {
+          for (const item of data["@graph"]) {
+            if (item["@type"] === "Residence") jsonLd = item;
+          }
+        }
+      } catch {}
+    });
 
-    const surfaceMatch = html.match(/(\d+(?:[.,]\d+)?)\s*m²/i);
-    const bedMatch = html.match(/(\d+)\s*(?:slaapkamer|bedroom|chambre)/i);
-    const bathMatch = html.match(/(\d+)\s*(?:badkamer|bathroom)/i);
+    const result: Partial<PropertyData> = {};
 
-    return {
-      title,
-      description: desc,
-      price,
-      surface_sqm: surfaceMatch ? parseFloat(surfaceMatch[1].replace(",", ".")) : 0,
-      bedrooms: bedMatch ? parseInt(bedMatch[1]) : 0,
-      bathrooms: bathMatch ? parseInt(bathMatch[1]) : 0,
-      photos: this.extractImages(html),
-      type: "house",
-    };
-  }
-
-  private stripHtml(raw: string): string {
-    return raw.replace(/<[^\u003e]*>/g, " ").replace(/\s+/g, " ").trim();
-  }
-
-  private extractMeta(html: string, property: string): string {
-    const match = html.match(new RegExp(`<meta[^\u003e]+property="${property}"[^\u003e]+content="([^"]+)"`, "i"));
-    return match ? match[1] : "";
-  }
-
-  private extractBetween(html: string, start: string, end: string): string {
-    const idx = html.indexOf(start);
-    if (idx === -1) return "";
-    const startIdx = html.indexOf(">", idx) + 1;
-    const endIdx = html.indexOf(end, startIdx);
-    return endIdx > startIdx ? this.stripHtml(html.slice(startIdx, endIdx)) : "";
-  }
-
-  private extractPrice(html: string): number {
-    const patterns = [
-      /property="product:price:amount"[^\u003e]+content="([\d.]+)"/i,
-      /class="[^"]*price[^"]*"[^}]*\u003e\s*([\d\s.,]+)\s*€/i,
-      /€\s*([\d\s.,]+)/,
-    ];
-    for (const p of patterns) {
-      const m = html.match(p);
-      if (m) {
-        const clean = m[1].replace(/[^\d]/g, "");
-        if (clean) return parseInt(clean);
+    if (jsonLd) {
+      result.title = jsonLd.name || "";
+      result.description = jsonLd.description || "";
+      const addr = jsonLd.address;
+      if (addr && typeof addr === "object") {
+        result.city = addr.addressLocality || "";
+        result.postal_code = addr.postalCode || "";
+        result.address = `${addr.streetAddress || ""}, ${addr.postalCode || ""} ${addr.addressLocality || ""}`;
       }
+      result.bedrooms = jsonLd.numberOfBedrooms || 0;
+      result.bathrooms = jsonLd.numberOfBathroomsTotal || 0;
+      const floorSize = jsonLd.floorSize;
+      if (floorSize && typeof floorSize === "object") result.surface_sqm = parseFloat(floorSize.value) || 0;
     }
-    return 0;
-  }
 
-  private extractImages(html: string): string[] {
+    // Fallbacks
+    if (!result.title) result.title = $("h1").first().text().trim() || $('meta[property="og:title"]').attr("content") || "";
+    if (!result.description) result.description = $('meta[property="og:description"]').attr("content") || "";
+
+    // Price
+    let price = 0;
+    $("*").each((_, el) => {
+      if (price) return;
+      const text = $(el).text().trim();
+      const m = text.match(/(\d{3}[\.\s]?\d{3})\s*€/);
+      if (m) price = parseInt(m[1].replace(/[\s.]/g, ""), 10) || 0;
+    });
+    result.price = price;
+
+    // Surface/bedrooms from body
+    if (!result.surface_sqm) {
+      const m = bodyText.match(/(\d+(?:[.,]\d+)?)\s*m²/i);
+      result.surface_sqm = m ? parseFloat(m[1].replace(",", ".")) : 0;
+    }
+    if (!result.bedrooms) {
+      const m = bodyText.match(/(\d+)\s*(?:slaapkamer|bedroom|chambre)/i);
+      result.bedrooms = m ? parseInt(m[1]) : 0;
+    }
+
+    // EPC
+    const epcMatch = bodyText.match(/(?:EPC|energie)[:\s]*([A-G])/i);
+    result.energy_rating = epcMatch ? epcMatch[1].toUpperCase() : "";
+
+    // Photos
     const imgs: string[] = [];
-    const matches = html.matchAll(/property="og:image"[^\u003e]+content="([^"]+)"/g);
-    for (const m of matches) imgs.push(m[1]);
-    return imgs.filter((u) => u.startsWith("http"));
+    const ogImg = $('meta[property="og:image"]').attr("content");
+    if (ogImg) imgs.push(ogImg);
+    $("img").each((_, el) => {
+      const src = $(el).attr("src") || "";
+      if (src.startsWith("http") && !src.includes("logo") && !src.includes("icon")) imgs.push(src);
+    });
+    result.photos = [...new Set(imgs)];
+
+    result.type = "house";
+    return result;
   }
 }
