@@ -1,4 +1,5 @@
 import { runScraper, ScrapeParams, ScraperSource } from "../scrapers/index.js";
+import { isHttpScraperSource, runHttpScraper, HttpScraperSource } from "../scrapers/http-dispatcher.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 
@@ -13,7 +14,7 @@ interface QueuedJob {
 
 export interface QueueJobParams {
   jobId: string;
-  source: ScraperSource;
+  source: ScraperSource | HttpScraperSource;
   siteSlug?: string;
   filters?: Record<string, unknown>;
   trigger: "manual" | "agent" | "scheduled" | "realtime";
@@ -37,7 +38,6 @@ class JobQueue {
    * Add a job to the queue
    */
   add(params: QueueJobParams): void {
-    // Check if job already in queue or running
     const isQueued = this.queue.some((q) => q.params.jobId === params.jobId);
     const isRunning = this.running.has(params.jobId);
 
@@ -46,10 +46,9 @@ class JobQueue {
       return;
     }
 
-    // Convert to ScrapeParams
     const scrapeParams: ScrapeParams = {
       jobId: params.jobId,
-      source: params.source,
+      source: params.source as ScraperSource,
       filters: params.filters,
     };
 
@@ -58,42 +57,48 @@ class JobQueue {
       addedAt: Date.now(),
     });
 
-    logger.info(`Job ${params.jobId} added to queue`, { 
+    logger.info(`Job ${params.jobId} added to queue`, {
       source: params.source,
+      httpMode: isHttpScraperSource(params.source),
       trigger: params.trigger,
-      queueSize: this.queue.length 
+      queueSize: this.queue.length,
     });
-    
-    // Start processor if not running
+
     if (!this.processorInterval) {
       this.start();
     }
   }
 
   /**
-   * Process the next job in the queue
+   * Process the next job — dispatches to HTTP or Playwright scraper
    */
   private async processNext(): Promise<void> {
-    if (this.running.size >= this.maxConcurrent) {
-      return; // Max concurrent jobs reached
-    }
+    if (this.running.size >= this.maxConcurrent) return;
 
     const job = this.queue.shift();
-    if (!job) {
-      return; // Queue is empty
-    }
+    if (!job) return;
 
     this.running.add(job.params.jobId);
-    
-    logger.info(`Starting job ${job.params.jobId}`, { 
+
+    logger.info(`Starting job ${job.params.jobId}`, {
       source: job.params.source,
+      httpMode: isHttpScraperSource(job.params.source),
       running: this.running.size,
-      queued: this.queue.length 
+      queued: this.queue.length,
     });
 
-    // Run the scraper
     try {
-      await runScraper(job.params);
+      // ── Dispatch: HTTP scrapers bypass Playwright ──
+      if (isHttpScraperSource(job.params.source)) {
+        await runHttpScraper({
+          jobId: job.params.jobId,
+          source: job.params.source as HttpScraperSource,
+          filters: job.params.filters,
+        });
+      } else {
+        // Fallback to Playwright-based scraper
+        await runScraper(job.params);
+      }
     } catch (error) {
       logger.error(`Job ${job.params.jobId} failed`, { error });
     } finally {
@@ -101,9 +106,6 @@ class JobQueue {
     }
   }
 
-  /**
-   * Start the queue processor
-   */
   private start(): void {
     if (this.processorInterval) return;
 
@@ -111,17 +113,12 @@ class JobQueue {
       while (this.running.size < this.maxConcurrent && this.queue.length > 0) {
         await this.processNext();
       }
-
-      // Stop interval if queue is empty and no jobs running
       if (this.queue.length === 0 && this.running.size === 0) {
         this.stop();
       }
     }, 1000);
   }
 
-  /**
-   * Stop the queue processor
-   */
   private stop(): void {
     if (this.processorInterval) {
       clearInterval(this.processorInterval);
@@ -129,40 +126,21 @@ class JobQueue {
     }
   }
 
-  /**
-   * Get queue status
-   */
   getStatus(): { running: number; queued: number } {
-    return {
-      running: this.running.size,
-      queued: this.queue.length,
-    };
+    return { running: this.running.size, queued: this.queue.length };
   }
 
-  /**
-   * Check if a job is currently running
-   */
   isJobRunning(jobId: string): boolean {
     return this.running.has(jobId);
   }
 
-  /**
-   * Check if a job is queued
-   */
   isJobQueued(jobId: string): boolean {
     return this.queue.some((q) => q.params.jobId === jobId);
   }
 
-  /**
-   * Get all queued jobs
-   */
   getQueuedJobs(): Array<{ jobId: string; addedAt: number }> {
-    return this.queue.map((q) => ({
-      jobId: q.params.jobId,
-      addedAt: q.addedAt,
-    }));
+    return this.queue.map((q) => ({ jobId: q.params.jobId, addedAt: q.addedAt }));
   }
 }
 
-// Singleton instance
 export const jobQueue = new JobQueue();

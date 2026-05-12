@@ -9,7 +9,7 @@ import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 import { randomDelay } from "../utils/retry.js";
 
-export type ScraperSource = "immoweb" | "immovlan" | "zimmo" | "era";
+export type ScraperSource = "immoweb" | "immovlan" | "zimmo" | "era" | "immotop";
 
 export interface ScrapeParams {
   jobId: string;
@@ -22,6 +22,7 @@ const SCRAPER_MAP: Record<ScraperSource, new (logger: any) => BaseScraper> = {
   immovlan: ImmovlanScraper,
   zimmo: ZimmoScraper,
   era: EraScraper,
+  immotop: EraScraper, // placeholder - immotop uses HTTP-only via http-dispatcher
 };
 
 export async function runScraper(params: ScrapeParams): Promise<void> {
