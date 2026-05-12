@@ -10,6 +10,11 @@ const client = new Client()
   .setEndpoint(config.appwrite.endpoint)
   .setProject(config.appwrite.project);
 
+// Set API key via headers for server-side write access
+if (config.appwrite.apiKey) {
+  client.headers["X-Appwrite-Key"] = config.appwrite.apiKey;
+}
+
 export const databases = new Databases(client);
 
 export const APPWRITE_DATABASE_ID = config.appwrite.databaseId;
