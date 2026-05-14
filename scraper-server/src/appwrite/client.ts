@@ -10,6 +10,11 @@ const client = new Client()
   .setEndpoint(config.appwrite.endpoint)
   .setProject(config.appwrite.project);
 
+import { installQueryPatch } from "./query-patch.js";
+
+// Enable query conversion for Appwrite 1.7.4 compatibility
+installQueryPatch();
+
 export const databases = new Databases(client);
 
 export const APPWRITE_DATABASE_ID = config.appwrite.databaseId;
