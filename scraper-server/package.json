@@ -15,7 +15,7 @@
     "@types/express-rate-limit": "^6.0.0",
     "@types/node-cron": "^3.0.11",
     "@types/uuid": "^10.0.0",
-    "appwrite": "^16.0.2",
+    "appwrite": "^13.0.0",
     "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
